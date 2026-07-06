@@ -1,4 +1,4 @@
-# Normalization Spec Model
+# Normalisation Spec Model
 
 This folder builds a normalization specification from raw EAF transcription data.
 
