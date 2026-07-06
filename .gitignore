@@ -1,5 +1,8 @@
-reports/*
 !.gitignore
 
-config/*
-!config/normalization_spec.yaml
+output/eaf/*
+output/logs/*
+output/undo/eaf/*
+
+__pycache__/
+*.pyc
