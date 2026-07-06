@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a normalization specification from transcription source values."""
+"""Build a normalisation specification from transcription source values."""
 
 from __future__ import annotations
 
