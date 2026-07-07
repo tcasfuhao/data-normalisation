@@ -7,7 +7,6 @@ import argparse
 import csv
 import os
 import re
-import unicodedata
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -128,6 +127,15 @@ def require_list(config: dict[str, Any], key: str, default: list[str]) -> list[s
     if not isinstance(value, list):
         raise ValueError(f"{key} must be a YAML list or string")
     return [str(item) for item in value]
+
+
+def optional_list(config: dict[str, Any], key: str) -> list[str] | None:
+    value = config.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    return require_list(config, key, [])
 
 
 def format_config_template(value: str | Path, config: dict[str, Any]) -> str:
@@ -280,20 +288,16 @@ def choose_transcription_paths(paths: list[Path], prefer_eaf: bool) -> list[Tran
     return sorted(chosen, key=lambda item: item.path)
 
 
-def remove_diacritics(text: str) -> str:
-    decomposed = unicodedata.normalize("NFD", text)
-    stripped = "".join(
-        char for char in decomposed if unicodedata.category(char) != "Mn"
-    )
-    return unicodedata.normalize("NFC", stripped)
-
-
 def normalise_text(text: str, policy: dict[str, Any]) -> str:
     for step in policy["normalization_steps"]:
         if step == "remove_bracketed_text":
             if policy["remove_bracketed_text"]:
                 text = re.sub(r"\[[^\]]*\]", " ", text)
                 text = re.sub(r"\([^)]*\)", " ", text)
+        elif step == "remove_chars":
+            if policy["remove_chars"]:
+                chars_to_remove = set(policy["chars_to_remove"])
+                text = "".join("" if char in chars_to_remove else char for char in text)
         elif step == "replace_sequences":
             if policy["replace_sequences"]:
                 text = replace_by_rules(text, policy["sequence_replacements"])
@@ -303,18 +307,10 @@ def normalise_text(text: str, policy: dict[str, Any]) -> str:
         elif step == "map_tones":
             if policy["map_tones"]:
                 text = replace_by_rules(text, policy["tone_replacements"])
-        elif step in {"remove_punctuation", "remove_configured_punctuation"}:
-            remove_chars = set(policy["remove_chars"])
-            if policy["remove_punctuation"]:
-                text = "".join(" " if char in remove_chars else char for char in text)
-        elif step in {"remove_hash", "remove_hash_markers"}:
-            text = text.replace("#", " ") if policy["remove_hash"] else text
         elif step == "collapse_whitespace":
             text = re.sub(r"\s+", " ", text).strip() if policy["collapse_whitespace"] else text
         elif step == "strip_spaces":
             text = re.sub(r"\s+", "", text) if policy["strip_spaces"] else text
-        elif step == "remove_diacritics":
-            text = remove_diacritics(text) if policy["remove_diacritics"] else text
         else:
             raise ValueError(f"Unknown normalization step: {step}")
     return text
@@ -461,6 +457,9 @@ def write_summary_csv(
 
 
 def build_policy(config: dict[str, Any]) -> dict[str, Any]:
+    chars_to_remove = optional_list(config, "chars_to_remove")
+    if chars_to_remove is None:
+        chars_to_remove = optional_list(config, "remove_chars") or []
     return {
         "normalization_steps": require_list(config, "normalization_steps", []),
         "sequence_replacements": parse_replacement_rules(
@@ -471,12 +470,10 @@ def build_policy(config: dict[str, Any]) -> dict[str, Any]:
         "replace_sequences": bool(config.get("replace_sequences", True)),
         "map_tones": bool(config.get("map_tones", True)),
         "lowercase_text": bool(config.get("lowercase_text", False)),
-        "remove_chars": require_list(config, "remove_chars", []),
-        "remove_hash": bool(config.get("remove_hash", True)),
-        "remove_punctuation": bool(config.get("remove_punctuation", True)),
+        "remove_chars": bool(config.get("remove_chars", config.get("remove_punctuation", True))),
+        "chars_to_remove": chars_to_remove,
         "collapse_whitespace": bool(config.get("collapse_whitespace", True)),
         "strip_spaces": bool(config.get("strip_spaces", True)),
-        "remove_diacritics": bool(config.get("remove_diacritics", False)),
     }
 
 
