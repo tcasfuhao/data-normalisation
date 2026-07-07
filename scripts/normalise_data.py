@@ -300,8 +300,8 @@ def normalise_text(text: str, policy: dict[str, Any]) -> str:
         elif step == "lowercase_text":
             if policy["lowercase_text"]:
                 text = text.lower()
-        elif step in {"map_tones"}:
-            if not policy["map_tones"]:
+        elif step == "map_tones":
+            if policy["map_tones"]:
                 text = replace_by_rules(text, policy["tone_replacements"])
         elif step in {"remove_punctuation", "remove_configured_punctuation"}:
             remove_chars = set(policy["remove_chars"])
