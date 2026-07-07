@@ -1,34 +1,39 @@
-language: yonghe_qiang_02
-title: Yonghe Qiang Normalization Spec
-data_root: ~projects/my-projects/asr-models/yonghe-qiang/data/raw/YH-758
+language: yonghe_qiang_03
+data_roots:
+  - ~/projects/my-projects/asr-models/yonghe-qiang/data/raw/YH-758
+  - ~/projects/my-projects/asr-models/yonghe-qiang/data/raw/YH-868
+  - ~/projects/my-projects/asr-models/yonghe-qiang/data/raw/YH-999
 transcription_globs:
   - "*.txt"
   - "*.eaf"
 prefer_eaf: true
-report_dir: ../reports/
-report_name: "{language}_normalization_spec.md"
-normalization_config_path: config/yonghe_qiang_normalization.yaml
+output_dir: output/
+eaf_output_dir: output/eaf/
+summary_csv_path: output/logs/{language}_normalisation_summary.csv
 
 # Current default policy for ASR training text.
-preserve_tone_numbers: true
-preserve_ipa_letters: true
-preserve_uppercase_n: true
+remove_bracketed_text: true
+replace_sequences: true
+map_tones: true
+lowercase_text: false
 remove_punctuation: true
 remove_hash: true
-collapse_whitespace: true
-strip_spaces: true
+collapse_whitespace: true # if there are multiple spaces in a row, replace with a single space
+strip_spaces: true # remove all whitespace
 remove_diacritics: false
-remove_ipa_modifiers: false
 
 # Ordered, editable forward normalization pipeline.
 # The reverse pipeline is generated automatically where mappings are one-to-one.
 normalization_steps:
   - remove_bracketed_text
   - replace_sequences
-  - map_tone_numbers
-  - remove_configured_punctuation
-  - remove_hash_markers
+  - lowercase_text
+  - map_tones
+  - remove_punctuation
+  - remove_hash
+  - collapse_whitespace
   - strip_spaces
+  - remove_diacritics
 
 # Multi-character transcription symbols can be made single-character here.
 # Format: "source=>target"
