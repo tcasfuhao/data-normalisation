@@ -17,9 +17,8 @@ remove_chars: false # Remove all characters in chars_to_remove below
 replace_sequences: false # Replace multi-character sequences with single-character symbols, as defined in sequence_replacements below
 lowercase_text: false
 map_tones: false
-collapse_whitespace: true # If there are multiple spaces in a row, replace them with a single space
+collapse_whitespace: false # If there are multiple spaces in a row, replace them with a single space
 strip_spaces: false # Remove all whitespace
-remove_diacritics: false
 
 # Ordered, editable forward normalization pipeline.
 # The reverse pipeline is generated automatically where mappings are one-to-one.
@@ -31,7 +30,6 @@ normalization_steps:
   - remove_chars
   - collapse_whitespace
   - strip_spaces
-  - remove_diacritics
 
 # Multi-character transcription symbols can be made single-character here.
 # Format: "source=>target"
