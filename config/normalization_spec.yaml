@@ -14,17 +14,18 @@ summary_csv_path: output/logs/{language}_normalisation_summary.csv
 # Current default policy for ASR training text.
 remove_bracketed_text: true
 replace_sequences: true
-map_tones: true
 lowercase_text: true
+map_tones: true
 remove_punctuation: true
 remove_hash: true
 collapse_whitespace: true # if there are multiple spaces in a row, replace with a single space
 strip_spaces: true # remove all whitespace
-remove_diacritics: false
+remove_diacritics: true
 
 # Ordered, editable forward normalization pipeline.
 # The reverse pipeline is generated automatically where mappings are one-to-one.
 normalization_steps:
+  - remove_bracketed_text
   - replace_sequences
   - lowercase_text
   - map_tones
@@ -33,7 +34,6 @@ normalization_steps:
   - collapse_whitespace
   - strip_spaces
   - remove_diacritics
-  - remove_bracketed_text
 
 # Multi-character transcription symbols can be made single-character here.
 # Format: "source=>target"
