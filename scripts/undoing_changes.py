@@ -157,11 +157,34 @@ def build_reverse_rules(config: dict[str, Any]) -> list[tuple[str, str]]:
         forward_rules.extend(
             parse_replacement_rules(require_list(config, "sequence_replacements", []))
         )
-    if not bool(config.get("map_tones", True)):
+    steps = require_list(config, "normalization_steps", [])
+    lowercase_after_tones = (
+        "map_tones" in steps
+        and "lowercase_text" in steps
+        and steps.index("lowercase_text") > steps.index("map_tones")
+        and bool(config.get("lowercase_text", False))
+    )
+    if bool(config.get("map_tones", True)) and not lowercase_after_tones:
         forward_rules.extend(
             parse_replacement_rules(require_list(config, "tone_replacements", []))
         )
     return reverse_rules(forward_rules)
+
+
+def tone_undo_warning(config: dict[str, Any]) -> str | None:
+    steps = require_list(config, "normalization_steps", [])
+    if not bool(config.get("map_tones", True)):
+        return None
+    if not bool(config.get("lowercase_text", False)):
+        return None
+    if "map_tones" not in steps or "lowercase_text" not in steps:
+        return None
+    if steps.index("lowercase_text") <= steps.index("map_tones"):
+        return None
+    return (
+        "Tone replacements were not added to undo rules because lowercase_text "
+        "runs after map_tones; lowercased tone symbols can collide with real letters."
+    )
 
 
 def replace_by_rules(text: str, rules: list[tuple[str, str]]) -> str:
@@ -256,6 +279,9 @@ def main() -> None:
         project_dir,
     )
     rules = build_reverse_rules(config)
+    warning = tone_undo_warning(config)
+    if warning:
+        print(f"Warning: {warning}")
 
     results: list[UndoResult] = []
     for source_path in find_eaf_paths(input_dir):
