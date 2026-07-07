@@ -128,6 +128,11 @@ def resolve_path(value: str | Path, base_dir: Path) -> Path:
     return (base_dir / path).resolve()
 
 
+def format_config_template(value: str | Path, config: dict[str, Any]) -> str:
+    template_values = {key: str(config_value) for key, config_value in config.items()}
+    return str(value).format_map(template_values)
+
+
 def parse_replacement_rules(raw_rules: list[str]) -> list[tuple[str, str]]:
     rules: list[tuple[str, str]] = []
     for raw_rule in raw_rules:
@@ -144,6 +149,19 @@ def parse_replacement_rules(raw_rules: list[str]) -> list[tuple[str, str]]:
 
 def reverse_rules(rules: list[tuple[str, str]]) -> list[tuple[str, str]]:
     return [(target, source) for source, target in rules if target]
+
+
+def build_reverse_rules(config: dict[str, Any]) -> list[tuple[str, str]]:
+    forward_rules: list[tuple[str, str]] = []
+    if bool(config.get("replace_sequences", True)):
+        forward_rules.extend(
+            parse_replacement_rules(require_list(config, "sequence_replacements", []))
+        )
+    if not bool(config.get("map_tones", True)):
+        forward_rules.extend(
+            parse_replacement_rules(require_list(config, "tone_replacements", []))
+        )
+    return reverse_rules(forward_rules)
 
 
 def replace_by_rules(text: str, rules: list[tuple[str, str]]) -> str:
@@ -229,11 +247,15 @@ def main() -> None:
     project_dir = config_path.parent.parent
     config = read_simple_yaml(config_path)
 
-    input_dir = resolve_path(config.get("eaf_output_dir", "output/eaf"), project_dir)
-    output_dir = resolve_path(config.get("undo_eaf_output_dir", "output/undo/eaf"), project_dir)
-    rules = reverse_rules(
-        parse_replacement_rules(require_list(config, "sequence_replacements", []))
+    input_dir = resolve_path(
+        format_config_template(config.get("eaf_output_dir", "output/eaf"), config),
+        project_dir,
     )
+    output_dir = resolve_path(
+        format_config_template(config.get("undo_eaf_output_dir", "output/undo/eaf"), config),
+        project_dir,
+    )
+    rules = build_reverse_rules(config)
 
     results: list[UndoResult] = []
     for source_path in find_eaf_paths(input_dir):
