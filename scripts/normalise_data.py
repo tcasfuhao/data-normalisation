@@ -130,6 +130,11 @@ def require_list(config: dict[str, Any], key: str, default: list[str]) -> list[s
     return [str(item) for item in value]
 
 
+def format_config_template(value: str | Path, config: dict[str, Any]) -> str:
+    template_values = {key: str(config_value) for key, config_value in config.items()}
+    return str(value).format_map(template_values)
+
+
 def resolve_path(value: str | Path, base_dir: Path) -> Path:
     raw_value = str(value)
     if raw_value.startswith("~projects/"):
@@ -286,17 +291,23 @@ def remove_diacritics(text: str) -> str:
 def normalise_text(text: str, policy: dict[str, Any]) -> str:
     for step in policy["normalization_steps"]:
         if step == "remove_bracketed_text":
-            text = re.sub(r"\[[^\]]*\]", " ", text)
-            text = re.sub(r"\([^)]*\)", " ", text)
+            if policy["remove_bracketed_text"]:
+                text = re.sub(r"\[[^\]]*\]", " ", text)
+                text = re.sub(r"\([^)]*\)", " ", text)
         elif step == "replace_sequences":
-            text = replace_by_rules(text, policy["sequence_replacements"])
-        elif step == "map_tone_numbers":
-            if not policy["preserve_tone_numbers"]:
+            if policy["replace_sequences"]:
+                text = replace_by_rules(text, policy["sequence_replacements"])
+        elif step == "lowercase_text":
+            if policy["lowercase_text"]:
+                text = text.lower()
+        elif step in {"map_tones"}:
+            if not policy["map_tones"]:
                 text = replace_by_rules(text, policy["tone_replacements"])
-        elif step == "remove_configured_punctuation":
+        elif step in {"remove_punctuation", "remove_configured_punctuation"}:
             remove_chars = set(policy["remove_chars"])
-            text = "".join(" " if char in remove_chars else char for char in text)
-        elif step == "remove_hash_markers":
+            if policy["remove_punctuation"]:
+                text = "".join(" " if char in remove_chars else char for char in text)
+        elif step in {"remove_hash", "remove_hash_markers"}:
             text = text.replace("#", " ") if policy["remove_hash"] else text
         elif step == "collapse_whitespace":
             text = re.sub(r"\s+", " ", text).strip() if policy["collapse_whitespace"] else text
@@ -304,12 +315,6 @@ def normalise_text(text: str, policy: dict[str, Any]) -> str:
             text = re.sub(r"\s+", "", text) if policy["strip_spaces"] else text
         elif step == "remove_diacritics":
             text = remove_diacritics(text) if policy["remove_diacritics"] else text
-        elif step == "remove_punctuation":
-            if policy["remove_punctuation"]:
-                text = "".join(
-                    " " if unicodedata.category(char).startswith("P") else char
-                    for char in text
-                )
         else:
             raise ValueError(f"Unknown normalization step: {step}")
     return text
@@ -462,7 +467,10 @@ def build_policy(config: dict[str, Any]) -> dict[str, Any]:
             require_list(config, "sequence_replacements", [])
         ),
         "tone_replacements": parse_replacement_rules(require_list(config, "tone_replacements", [])),
-        "preserve_tone_numbers": bool(config.get("preserve_tone_numbers", True)),
+        "remove_bracketed_text": bool(config.get("remove_bracketed_text", True)),
+        "replace_sequences": bool(config.get("replace_sequences", True)),
+        "map_tones": bool(config.get("map_tones", True)),
+        "lowercase_text": bool(config.get("lowercase_text", False)),
         "remove_chars": require_list(config, "remove_chars", []),
         "remove_hash": bool(config.get("remove_hash", True)),
         "remove_punctuation": bool(config.get("remove_punctuation", True)),
@@ -503,10 +511,19 @@ def main() -> None:
     data_roots = read_data_roots(config, project_dir)
     transcription_globs = require_list(config, "transcription_globs", ["*.eaf", "*.txt"])
     prefer_eaf = bool(config.get("prefer_eaf", True))
-    output_dir = resolve_path(config.get("output_dir", "output"), project_dir)
-    eaf_output_dir = resolve_path(config.get("eaf_output_dir", "output/eaf"), project_dir)
+    output_dir = resolve_path(
+        format_config_template(config.get("output_dir", "output"), config),
+        project_dir,
+    )
+    eaf_output_dir = resolve_path(
+        format_config_template(config.get("eaf_output_dir", "output/eaf"), config),
+        project_dir,
+    )
     summary_path = resolve_path(
-        config.get("summary_csv_path", "output/logs/normalisation_summary.csv"),
+        format_config_template(
+            config.get("summary_csv_path", "output/logs/normalisation_summary.csv"),
+            config,
+        ),
         project_dir,
     )
 
