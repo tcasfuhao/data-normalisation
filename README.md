@@ -17,7 +17,7 @@ output/eaf/
 output/logs/normalisation_summary.csv
 ```
 
-The runner prefers `.eaf` over matching `.txt` files. It copies EAF documents to `output/eaf/` and changes only `ANNOTATION_VALUE` text. Matching `.txt` files are skipped without being normalised. Tone replacement rules remain configurable, but they are only applied when `map_tones` is `false`. The ordered `normalization_steps` use the same names as the policy flags where a step is policy-controlled, including `remove_bracketed_text`, `replace_sequences`, and `lowercase_text`.
+The runner prefers `.eaf` over matching `.txt` files. It copies EAF documents to `output/eaf/` and changes only `ANNOTATION_VALUE` text. Matching `.txt` files are skipped without being normalised. Tone replacement rules remain configurable, and are applied when `map_tones` is `true`. The ordered `normalization_steps` use the same names as the policy flags where a step is policy-controlled, including `remove_bracketed_text`, `replace_sequences`, and `lowercase_text`.
 
 Use `--dry-run` to print counts and sample transformations without writing normalised EAF files:
 
@@ -32,6 +32,8 @@ python scripts/undoing_changes.py --config config/normalization_spec.yaml
 ```
 
 Undo output is written to `output/undo/eaf/`. This only reverses replacement arrows such as `ƙ=>kʰ`; removed punctuation, spaces, hashes, and bracketed text cannot be reconstructed.
+If `lowercase_text` runs after `map_tones`, tone symbols are lowercased and may
+collide with real letters, so tone mappings are not safely reversible.
 
 Use `--dry-run` to print counts and sample transformations without writing normalised EAF files:
 
