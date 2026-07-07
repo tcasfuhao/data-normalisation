@@ -15,7 +15,7 @@ summary_csv_path: output/logs/{language}_normalisation_summary.csv
 remove_bracketed_text: true
 replace_sequences: true
 map_tones: true
-lowercase_text: false
+lowercase_text: true
 remove_punctuation: true
 remove_hash: true
 collapse_whitespace: true # if there are multiple spaces in a row, replace with a single space
