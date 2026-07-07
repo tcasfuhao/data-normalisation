@@ -25,7 +25,6 @@ remove_diacritics: false
 # Ordered, editable forward normalization pipeline.
 # The reverse pipeline is generated automatically where mappings are one-to-one.
 normalization_steps:
-  - remove_bracketed_text
   - replace_sequences
   - lowercase_text
   - map_tones
@@ -34,6 +33,7 @@ normalization_steps:
   - collapse_whitespace
   - strip_spaces
   - remove_diacritics
+  - remove_bracketed_text
 
 # Multi-character transcription symbols can be made single-character here.
 # Format: "source=>target"
