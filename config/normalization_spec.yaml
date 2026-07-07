@@ -12,15 +12,14 @@ eaf_output_dir: output/eaf/
 summary_csv_path: output/logs/{language}_normalisation_summary.csv
 
 # Current default policy for ASR training text.
-remove_bracketed_text: true
-replace_sequences: true
-lowercase_text: true
-map_tones: true
-remove_punctuation: true
-remove_hash: true
-collapse_whitespace: true # if there are multiple spaces in a row, replace with a single space
-strip_spaces: true # remove all whitespace
-remove_diacritics: true
+remove_bracketed_text: false # Remove all text inside brackets, including the brackets themselves, and replaces the whole string with a single space
+remove_chars: false # Remove all characters in chars_to_remove below
+replace_sequences: false # Replace multi-character sequences with single-character symbols, as defined in sequence_replacements below
+lowercase_text: false
+map_tones: false
+collapse_whitespace: true # If there are multiple spaces in a row, replace them with a single space
+strip_spaces: false # Remove all whitespace
+remove_diacritics: false
 
 # Ordered, editable forward normalization pipeline.
 # The reverse pipeline is generated automatically where mappings are one-to-one.
@@ -29,8 +28,7 @@ normalization_steps:
   - replace_sequences
   - lowercase_text
   - map_tones
-  - remove_punctuation
-  - remove_hash
+  - remove_chars
   - collapse_whitespace
   - strip_spaces
   - remove_diacritics
@@ -53,8 +51,9 @@ tone_replacements:
   - "53=>F"
   - "55=>H"
 
-remove_chars:
+chars_to_remove: # When remove_chars is true, these characters will be removed from the text
   - ","
+  - "."
   - "?"
   - "？"
   - "."
