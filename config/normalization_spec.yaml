@@ -1,24 +1,41 @@
-language: yonghe_qiang_03
+language: yonghe_qiang_01
 data_roots:
-  - ~/projects/my-projects/asr-models/yonghe-qiang/data/raw/YH-758
-  - ~/projects/my-projects/asr-models/yonghe-qiang/data/raw/YH-868
-  - ~/projects/my-projects/asr-models/yonghe-qiang/data/raw/YH-999
+  - ~/projects/my-projects/asr-models/language-downloads/yonghe-qiang_01/normalised/2026-08-03-10-11-09
 transcription_globs:
   - "*.txt"
   - "*.eaf"
-prefer_eaf: true
-output_dir: output/
-eaf_output_dir: output/eaf/
-summary_csv_path: output/logs/{language}_normalisation_summary.csv
+  - "*.TextGrid"
+  - "*.csv"
+  - "*.tsv"
+
+# Every discovered format listed here is normalised; this is not a fallback order.
+prefer:
+  - ".eaf"
+
+# Structured transcription selectors accept one name, a list of names, or all.
+eaf_tier: all
+textgrid_tier: all
+
+# Delimited-table selectors accept header names, 1-based column numbers, or all.
+csv_has_header: true
+csv_text_column: all
+tsv_has_header: true
+tsv_text_column: all
+txt_delimiter: tab
+txt_has_header: false
+txt_text_column: 4
+
+# Logs remain in this project at output/logs/<language>/<timestamp>/.
+logs_dir: logs
 
 # Current default policy for ASR training text.
 remove_bracketed_text: false # Remove all text inside brackets, including the brackets themselves, and replaces the whole string with a single space
-remove_chars: false # Remove all characters in chars_to_remove below
-replace_sequences: false # Replace multi-character sequences with single-character symbols, as defined in sequence_replacements below
-lowercase_text: false
-map_tones: false
+remove_chars: true # Remove all characters in chars_to_remove below
+replace_sequences: true # Replace multi-character sequences with single-character symbols, as defined in sequence_replacements below
+lowercase_text: true
+map_tones: true
 collapse_whitespace: false # If there are multiple spaces in a row, replace them with a single space
-strip_spaces: false # Remove all whitespace
+strip_spaces: true # Remove all whitespace
 
 # Ordered, editable forward normalization pipeline.
 # The reverse pipeline is generated automatically where mappings are one-to-one.
@@ -40,6 +57,9 @@ sequence_replacements:
   - "tsʰ=>ƾ"
   - "tʂʰ=>ƪ"
   - "tɕʰ=>ƫ"
+  - "qʰ=>ƣ"
+  - "ɕʰ=>Ƭ"
+  - ",=> "
 
 # Tone numbers can be mapped to single machine-trainable symbols.
 # Format: "source=>target"
@@ -50,7 +70,6 @@ tone_replacements:
   - "55=>H"
 
 chars_to_remove: # When remove_chars is true, these characters will be removed from the text
-  - ","
   - "."
   - "?"
   - "？"
