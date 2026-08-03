@@ -1,7 +1,6 @@
 !.gitignore
 
-output/eaf/*
-output/logs/*
+logs/*
 output/undo/eaf/*
 
 __pycache__/
