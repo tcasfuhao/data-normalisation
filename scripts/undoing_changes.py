@@ -1,307 +1,167 @@
 #!/usr/bin/env python3
-"""Reverse configured one-to-one symbol replacements in normalised EAF files."""
+"""Reverse configured one-to-one replacements in explicit normalisation runs."""
 
 from __future__ import annotations
 
 import argparse
-import os
-import re
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+
+from normalise_data import (
+    RUN_TIMESTAMP_RE,
+    SUPPORTED_FORMATS,
+    SourceSelection,
+    current_timestamp,
+    parse_replacement_rules,
+    read_simple_yaml,
+    replace_by_rules,
+    require_list,
+    transform_source,
+    validate_config,
+)
 
 
 DEFAULT_CONFIG = Path("config/normalization_spec.yaml")
 
 
-@dataclass
-class UndoResult:
-    source_path: Path
-    output_path: Path
-    annotations_seen: int
-    annotations_changed: int
-    samples: list[tuple[str, str]]
+@dataclass(frozen=True)
+class UndoRun:
+    run_dir: Path
+    data_root: Path
+    normalise_timestamp: str
+    output_dir: Path
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument(
-        "--config",
+        "--run-dir",
         type=Path,
-        default=DEFAULT_CONFIG,
-        help=f"Normalisation YAML config. Default: {DEFAULT_CONFIG}",
+        action="append",
+        required=True,
+        help="Normalised timestamp directory to undo; may be repeated.",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print counts and sample reversals without writing outputs.",
+        help="Print counts and destinations without writing undone files.",
     )
     return parser.parse_args()
 
 
-def parse_scalar(value: str) -> Any:
-    value = value.strip()
-    if value in {"null", "None", "~"}:
-        return None
-    if value in {"true", "True"}:
-        return True
-    if value in {"false", "False"}:
-        return False
-    if (value.startswith('"') and value.endswith('"')) or (
-        value.startswith("'") and value.endswith("'")
-    ):
-        return value[1:-1]
-    return value
-
-
-def strip_yaml_comment(line: str) -> str:
-    quote: str | None = None
-    escaped = False
-    for idx, char in enumerate(line):
-        if escaped:
-            escaped = False
-            continue
-        if char == "\\":
-            escaped = True
-            continue
-        if char in {"'", '"'}:
-            if quote == char:
-                quote = None
-            elif quote is None:
-                quote = char
-            continue
-        if char == "#" and quote is None:
-            return line[:idx]
-    return line
-
-
-def read_simple_yaml(path: Path) -> dict[str, Any]:
-    values: dict[str, Any] = {}
-    current_list_key: str | None = None
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line_without_comment = strip_yaml_comment(raw_line).rstrip()
-        if not line_without_comment.strip():
-            continue
-        stripped = line_without_comment.strip()
-
-        if stripped.startswith("- "):
-            if current_list_key is None:
-                raise ValueError(f"List item without key in {path}: {raw_line}")
-            values[current_list_key].append(parse_scalar(stripped[2:]))
-            continue
-
-        if ":" not in stripped:
-            raise ValueError(f"Unsupported YAML line in {path}: {raw_line}")
-
-        key, value = stripped.split(":", 1)
-        key = key.strip()
-        value = value.strip()
-        if value:
-            values[key] = parse_scalar(value)
-            current_list_key = None
-        else:
-            values[key] = []
-            current_list_key = key
-    return values
-
-
-def require_list(config: dict[str, Any], key: str, default: list[str]) -> list[str]:
-    value = config.get(key, default)
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if not isinstance(value, list):
-        raise ValueError(f"{key} must be a YAML list or string")
-    return [str(item) for item in value]
-
-
-def resolve_path(value: str | Path, base_dir: Path) -> Path:
-    raw_value = str(value)
-    if raw_value.startswith("~projects/"):
-        raw_value = f"~/{raw_value[1:]}"
-
-    path = Path(os.path.expanduser(raw_value))
-    if path.is_absolute():
-        return path
-    return (base_dir / path).resolve()
-
-
-def format_config_template(value: str | Path, config: dict[str, Any]) -> str:
-    template_values = {key: str(config_value) for key, config_value in config.items()}
-    return str(value).format_map(template_values)
-
-
-def parse_replacement_rules(raw_rules: list[str]) -> list[tuple[str, str]]:
-    rules: list[tuple[str, str]] = []
-    for raw_rule in raw_rules:
-        if "=>" not in raw_rule:
-            raise ValueError(f"Replacement rule must use 'source=>target': {raw_rule}")
-        source, target = raw_rule.split("=>", 1)
-        source = source.strip()
-        target = target.strip()
-        if not source:
-            raise ValueError(f"Replacement rule has empty source: {raw_rule}")
-        rules.append((source, target))
-    return rules
-
-
-def reverse_rules(rules: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    return [(target, source) for source, target in rules if target]
-
-
-def build_reverse_rules(config: dict[str, Any]) -> list[tuple[str, str]]:
-    forward_rules: list[tuple[str, str]] = []
+def build_reverse_rules(config: dict[str, object]) -> list[tuple[str, str]]:
+    forward: list[tuple[str, str]] = []
     if bool(config.get("replace_sequences", True)):
-        forward_rules.extend(
+        forward.extend(
             parse_replacement_rules(require_list(config, "sequence_replacements", []))
         )
-    steps = require_list(config, "normalization_steps", [])
-    lowercase_after_tones = (
-        "map_tones" in steps
-        and "lowercase_text" in steps
-        and steps.index("lowercase_text") > steps.index("map_tones")
-        and bool(config.get("lowercase_text", False))
-    )
-    if bool(config.get("map_tones", True)) and not lowercase_after_tones:
-        forward_rules.extend(
+    if bool(config.get("map_tones", True)):
+        forward.extend(
             parse_replacement_rules(require_list(config, "tone_replacements", []))
         )
-    return reverse_rules(forward_rules)
+    targets = [target for _, target in forward if target]
+    if len(targets) != len(set(targets)):
+        raise ValueError("Undo rules are ambiguous because replacement targets repeat")
+    return [(target, source) for source, target in forward if target]
 
 
-def tone_undo_warning(config: dict[str, Any]) -> str | None:
-    steps = require_list(config, "normalization_steps", [])
-    if not bool(config.get("map_tones", True)):
-        return None
-    if not bool(config.get("lowercase_text", False)):
-        return None
-    if "map_tones" not in steps or "lowercase_text" not in steps:
-        return None
-    if steps.index("lowercase_text") <= steps.index("map_tones"):
-        return None
-    return (
-        "Tone replacements were not added to undo rules because lowercase_text "
-        "runs after map_tones; lowercased tone symbols can collide with real letters."
-    )
+def describe_run(run_dir: Path, undo_timestamp: str) -> UndoRun:
+    run_dir = run_dir.expanduser().resolve()
+    if not run_dir.is_dir():
+        raise ValueError(f"Normalisation run directory does not exist: {run_dir}")
+    if run_dir.parent.name.casefold() != "normalised":
+        raise ValueError(f"Run directory must be directly below a normalised folder: {run_dir}")
+    if not RUN_TIMESTAMP_RE.fullmatch(run_dir.name):
+        raise ValueError(f"Run directory name is not a normalization timestamp: {run_dir.name}")
+    data_root = run_dir.parent.parent
+    output_dir = data_root / "undone" / f"{run_dir.name}-{undo_timestamp}"
+    return UndoRun(run_dir, data_root, run_dir.name, output_dir)
 
 
-def replace_by_rules(text: str, rules: list[tuple[str, str]]) -> str:
-    for source, target in sorted(rules, key=lambda item: len(item[0]), reverse=True):
-        text = text.replace(source, target)
-    return text
+def find_run_sources(run: UndoRun) -> list[SourceSelection]:
+    sources: list[SourceSelection] = []
+    for path in sorted(item for item in run.run_dir.rglob("*") if item.is_file()):
+        source_type = path.suffix.casefold()
+        if source_type not in SUPPORTED_FORMATS:
+            continue
+        sources.append(
+            SourceSelection(
+                path=path,
+                data_root=run.run_dir,
+                source_type=source_type,
+                selected=True,
+            )
+        )
+    return sources
 
 
-def strip_namespace(tag: str) -> str:
-    if "}" in tag:
-        return tag.rsplit("}", 1)[1]
-    return tag
-
-
-def undo_eaf(
-    source_path: Path,
-    output_path: Path,
-    rules: list[tuple[str, str]],
+def run_undo(
+    config: dict[str, object],
+    run_directories: list[Path],
     *,
     dry_run: bool,
-) -> UndoResult:
-    samples: list[tuple[str, str]] = []
-    tree = ET.parse(source_path)
-    root = tree.getroot()
+    timestamp: str | None = None,
+) -> tuple[list[object], list[UndoRun]]:
+    validate_config(config)
+    undo_timestamp = timestamp or current_timestamp()
+    if not RUN_TIMESTAMP_RE.fullmatch(undo_timestamp):
+        raise ValueError(f"Invalid undo timestamp: {undo_timestamp}")
+    runs = [describe_run(path, undo_timestamp) for path in run_directories]
+    if len({run.run_dir for run in runs}) != len(runs):
+        raise ValueError("The same --run-dir was provided more than once")
+    existing = [run.output_dir for run in runs if run.output_dir.exists()]
+    if existing:
+        raise FileExistsError("Undo destination already exists: " + ", ".join(map(str, existing)))
 
-    annotations_seen = 0
-    annotations_changed = 0
-    for element in root.iter():
-        if strip_namespace(element.tag) != "ANNOTATION_VALUE":
-            continue
-        annotations_seen += 1
-        original = element.text or ""
-        if original == "":
-            continue
-        undone = replace_by_rules(original, rules)
-        if undone != original:
-            annotations_changed += 1
-            if len(samples) < 10:
-                samples.append((original, undone))
-            if not dry_run:
-                element.text = undone
+    rules = build_reverse_rules(config)
+    transform = lambda text: replace_by_rules(text, rules)
+    sources_by_run = [(run, find_run_sources(run)) for run in runs]
+    if not any(sources for _, sources in sources_by_run):
+        raise ValueError("No supported files were found in the selected normalization runs")
+    # Validate every file and selector before creating any undo destination.
+    preview_results: list[object] = []
+    for run, sources in sources_by_run:
+        for source in sources:
+            output_path = run.output_dir / source.path.relative_to(run.run_dir)
+            preview_results.append(
+                transform_source(source, output_path, config, transform, dry_run=True)
+            )
+    if dry_run:
+        return preview_results, runs
 
-    if not dry_run:
-        ET.register_namespace("xsi", "http://www.w3.org/2001/XMLSchema-instance")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        tree.write(output_path, encoding="UTF-8", xml_declaration=True)
+    for run, sources in sources_by_run:
+        if sources:
+            run.output_dir.mkdir(parents=True, exist_ok=False)
 
-    return UndoResult(
-        source_path=source_path,
-        output_path=output_path,
-        annotations_seen=annotations_seen,
-        annotations_changed=annotations_changed,
-        samples=samples,
-    )
-
-
-def find_eaf_paths(input_dir: Path) -> list[Path]:
-    return sorted(path for path in input_dir.rglob("*.eaf") if path.is_file())
-
-
-def output_path_for(source_path: Path, input_dir: Path, output_dir: Path) -> Path:
-    return output_dir / source_path.relative_to(input_dir)
-
-
-def print_dry_run(results: list[UndoResult]) -> None:
-    print("Dry run: no files written.")
-    print(f"EAF files summarised: {len(results)}")
-    print(f"Annotations seen: {sum(result.annotations_seen for result in results)}")
-    print(f"Annotations changed: {sum(result.annotations_changed for result in results)}")
-    print()
-    for result in results:
-        print(
-            f"{result.source_path} "
-            f"seen={result.annotations_seen} changed={result.annotations_changed}"
-        )
-        for original, undone in result.samples[:3]:
-            print(f"  {original} -> {undone}")
+    results: list[object] = []
+    for run, sources in sources_by_run:
+        for source in sources:
+            output_path = run.output_dir / source.path.relative_to(run.run_dir)
+            results.append(
+                transform_source(source, output_path, config, transform, dry_run=False)
+            )
+    return results, runs
 
 
 def main() -> None:
     args = parse_args()
-    config_path = args.config.resolve()
-    project_dir = config_path.parent.parent
-    config = read_simple_yaml(config_path)
-
-    input_dir = resolve_path(
-        format_config_template(config.get("eaf_output_dir", "output/eaf"), config),
-        project_dir,
+    config = read_simple_yaml(args.config.resolve())
+    results, runs = run_undo(
+        config,
+        args.run_dir,
+        dry_run=args.dry_run,
     )
-    output_dir = resolve_path(
-        format_config_template(config.get("undo_eaf_output_dir", "output/undo/eaf"), config),
-        project_dir,
-    )
-    rules = build_reverse_rules(config)
-    warning = tone_undo_warning(config)
-    if warning:
-        print(f"Warning: {warning}")
-
-    results: list[UndoResult] = []
-    for source_path in find_eaf_paths(input_dir):
-        results.append(
-            undo_eaf(
-                source_path,
-                output_path_for(source_path, input_dir, output_dir),
-                rules,
-                dry_run=args.dry_run,
-            )
-        )
-
     if args.dry_run:
-        print_dry_run(results)
-        return
-
-    print(f"Undo EAF files written: {len(results)}")
-    print(f"Annotations changed: {sum(result.annotations_changed for result in results)}")
-    print(f"Undo output: {output_dir}")
-    print("Only one-to-one replacements were reversed; removed text was not reconstructed.")
+        print("Dry run: no undone files written.")
+    print(f"Files processed: {len(results)}")
+    print(f"Annotations/cells changed: {sum(result.annotations_changed for result in results)}")
+    for run in runs:
+        print(f"Undo output for {run.run_dir}: {run.output_dir}")
+    print(
+        "Only one-to-one replacements were reversed; removals, whitespace changes, "
+        "bracket removal, and case conversion were not reconstructed."
+    )
 
 
 if __name__ == "__main__":
