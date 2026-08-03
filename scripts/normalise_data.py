@@ -1,24 +1,37 @@
 #!/usr/bin/env python3
-"""Normalise configured transcription data into copied EAF files."""
+"""Normalise configured transcription data into timestamped source-side runs."""
 
 from __future__ import annotations
 
 import argparse
 import csv
+import io
 import os
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 DEFAULT_CONFIG = Path("config/normalization_spec.yaml")
+SUPPORTED_FORMATS = {".eaf", ".textgrid", ".csv", ".tsv", ".txt"}
+RESERVED_DIRECTORIES = {"normalised", "undone"}
+OBSOLETE_KEYS = {"prefer_eaf", "output_dir", "eaf_output_dir", "summary_csv_path"}
+RUN_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}$")
+TEXTGRID_ITEM_RE = re.compile(r"^\s*item\s+\[\d+\]:\s*$")
+TEXTGRID_CLASS_RE = re.compile(r'^\s*class\s*=\s*"((?:""|[^"])*)"\s*$')
+TEXTGRID_NAME_RE = re.compile(r'^\s*name\s*=\s*"((?:""|[^"])*)"\s*$')
+TEXTGRID_VALUE_RE = re.compile(
+    r'^(\s*(?:text|mark)\s*=\s*")((?:""|[^"])*)("\s*)(\r?\n)?$'
+)
 
 
 @dataclass(frozen=True)
-class TranscriptionPath:
+class SourceSelection:
     path: Path
+    data_root: Path
     source_type: str
     selected: bool
     warning: str = ""
@@ -27,8 +40,12 @@ class TranscriptionPath:
 @dataclass
 class NormalisationResult:
     source_path: Path
+    data_root: Path
     output_path: Path | None
+    run_dir: Path | None
     source_type: str
+    selected: bool
+    selector: str
     annotations_seen: int
     annotations_changed: int
     empty_after_normalisation_count: int
@@ -36,24 +53,50 @@ class NormalisationResult:
     samples: list[tuple[str, str]]
 
 
+@dataclass(frozen=True)
+class EncodedText:
+    text: str
+    encoding: str
+    bom: bytes
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=DEFAULT_CONFIG,
-        help=f"Normalisation YAML config. Default: {DEFAULT_CONFIG}",
-    )
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print counts and sample transformations without writing outputs.",
+        help="Print counts and destinations without writing data or logs.",
     )
     return parser.parse_args()
 
 
+def parse_inline_list(value: str) -> list[Any]:
+    inner = value[1:-1].strip()
+    if not inner:
+        return []
+    items: list[Any] = []
+    start = 0
+    quote: str | None = None
+    for index, char in enumerate(inner):
+        if char in {'"', "'"}:
+            if quote is None:
+                quote = char
+            elif quote == char:
+                quote = None
+        elif char == "," and quote is None:
+            items.append(parse_scalar(inner[start:index]))
+            start = index + 1
+    if quote is not None:
+        raise ValueError(f"Unterminated quote in inline list: {value}")
+    items.append(parse_scalar(inner[start:]))
+    return items
+
+
 def parse_scalar(value: str) -> Any:
     value = value.strip()
+    if value.startswith("[") and value.endswith("]"):
+        return parse_inline_list(value)
     if value in {"null", "None", "~"}:
         return None
     if value in {"true", "True"}:
@@ -70,7 +113,7 @@ def parse_scalar(value: str) -> Any:
 def strip_yaml_comment(line: str) -> str:
     quote: str | None = None
     escaped = False
-    for idx, char in enumerate(line):
+    for index, char in enumerate(line):
         if escaped:
             escaped = False
             continue
@@ -84,7 +127,7 @@ def strip_yaml_comment(line: str) -> str:
                 quote = char
             continue
         if char == "#" and quote is None:
-            return line[:idx]
+            return line[:index]
     return line
 
 
@@ -92,20 +135,16 @@ def read_simple_yaml(path: Path) -> dict[str, Any]:
     values: dict[str, Any] = {}
     current_list_key: str | None = None
     for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line_without_comment = strip_yaml_comment(raw_line).rstrip()
-        if not line_without_comment.strip():
+        stripped = strip_yaml_comment(raw_line).strip()
+        if not stripped:
             continue
-        stripped = line_without_comment.strip()
-
         if stripped.startswith("- "):
             if current_list_key is None:
                 raise ValueError(f"List item without key in {path}: {raw_line}")
             values[current_list_key].append(parse_scalar(stripped[2:]))
             continue
-
         if ":" not in stripped:
             raise ValueError(f"Unsupported YAML line in {path}: {raw_line}")
-
         key, value = stripped.split(":", 1)
         key = key.strip()
         value = value.strip()
@@ -131,27 +170,126 @@ def require_list(config: dict[str, Any], key: str, default: list[str]) -> list[s
 
 def optional_list(config: dict[str, Any], key: str) -> list[str] | None:
     value = config.get(key)
-    if value is None:
-        return None
-    if isinstance(value, bool):
+    if value is None or isinstance(value, bool):
         return None
     return require_list(config, key, [])
 
 
-def format_config_template(value: str | Path, config: dict[str, Any]) -> str:
-    template_values = {key: str(config_value) for key, config_value in config.items()}
-    return str(value).format_map(template_values)
+def configured_selector(value: Any, key: str) -> list[str]:
+    if isinstance(value, str):
+        selectors = [value.strip()]
+    elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+        selectors = [item.strip() for item in value]
+    else:
+        raise ValueError(f"{key} must be a name, number, 'all', or a YAML list")
+    if not selectors or any(not item for item in selectors):
+        raise ValueError(f"{key} must not be empty")
+    if len(selectors) > 1 and any(item.casefold() == "all" for item in selectors):
+        raise ValueError(f"{key}: 'all' must be used by itself")
+    folded = [item.casefold() for item in selectors]
+    if len(folded) != len(set(folded)):
+        raise ValueError(f"{key} contains duplicate selectors")
+    return selectors
+
+
+def selector_text(selectors: list[str]) -> str:
+    return selectors[0] if len(selectors) == 1 else "[" + ", ".join(selectors) + "]"
+
+
+def validate_config(config: dict[str, Any]) -> None:
+    obsolete = sorted(OBSOLETE_KEYS.intersection(config))
+    if obsolete:
+        names = ", ".join(obsolete)
+        raise ValueError(
+            f"Obsolete config key(s): {names}. Use prefer, logs_dir, and the "
+            "timestamped <data_root>/normalised layout instead."
+        )
 
 
 def resolve_path(value: str | Path, base_dir: Path) -> Path:
     raw_value = str(value)
     if raw_value.startswith("~projects/"):
         raw_value = f"~/{raw_value[1:]}"
-
     path = Path(os.path.expanduser(raw_value))
-    if path.is_absolute():
-        return path
-    return (base_dir / path).resolve()
+    return path if path.is_absolute() else (base_dir / path).resolve()
+
+
+def read_data_roots(config: dict[str, Any], project_dir: Path) -> list[Path]:
+    if "data_roots" in config:
+        raw_roots = require_list(config, "data_roots", [])
+    elif "data_root" in config:
+        raw_roots = [str(config["data_root"])]
+    else:
+        raise ValueError("Config must define data_root or data_roots")
+    if not raw_roots:
+        raise ValueError("Config data_roots must not be empty")
+    roots = [resolve_path(value, project_dir) for value in raw_roots]
+    for root in roots:
+        if not root.is_dir():
+            raise ValueError(f"Configured data root is not a directory: {root}")
+    return roots
+
+
+def matching_data_root(path: Path, data_roots: list[Path]) -> Path:
+    matches = [root for root in data_roots if path == root or root in path.parents]
+    if not matches:
+        raise ValueError(f"{path} is not under any configured data root")
+    return max(matches, key=lambda item: len(item.parts))
+
+
+def canonical_format(value: str) -> str:
+    value = value.strip()
+    if not value.startswith("."):
+        value = "." + value
+    folded = value.casefold()
+    if folded not in SUPPORTED_FORMATS:
+        supported = ", ".join(sorted(SUPPORTED_FORMATS))
+        raise ValueError(f"Unsupported preferred format {value!r}; supported: {supported}")
+    return folded
+
+
+def preferred_formats(config: dict[str, Any]) -> set[str]:
+    raw = configured_selector(config.get("prefer", []), "prefer")
+    formats = [canonical_format(item) for item in raw]
+    if len(formats) != len(set(formats)):
+        raise ValueError("prefer contains duplicate formats")
+    return set(formats)
+
+
+def is_generated_path(path: Path, data_root: Path) -> bool:
+    relative = path.relative_to(data_root)
+    return any(part.casefold() in RESERVED_DIRECTORIES for part in relative.parts[:-1])
+
+
+def discover_sources(
+    data_roots: list[Path], patterns: list[str], selected_formats: set[str]
+) -> list[SourceSelection]:
+    discovered: set[Path] = set()
+    for root in data_roots:
+        for pattern in patterns:
+            discovered.update(path for path in root.glob(pattern) if path.is_file())
+            if "**" not in pattern:
+                discovered.update(path for path in root.rglob(pattern) if path.is_file())
+
+    selections: list[SourceSelection] = []
+    for path in sorted(discovered):
+        data_root = matching_data_root(path, data_roots)
+        if is_generated_path(path, data_root):
+            continue
+        source_type = path.suffix.casefold()
+        if source_type not in SUPPORTED_FORMATS:
+            continue
+        selected = source_type in selected_formats
+        selections.append(
+            SourceSelection(
+                path=path,
+                data_root=data_root,
+                source_type=source_type,
+                selected=selected,
+                warning="" if selected else "format not selected by prefer",
+            )
+        )
+    return selections
 
 
 def parse_replacement_rules(raw_rules: list[str]) -> list[tuple[str, str]]:
@@ -174,118 +312,27 @@ def replace_by_rules(text: str, rules: list[tuple[str, str]]) -> str:
     return text
 
 
-def strip_namespace(tag: str) -> str:
-    if "}" in tag:
-        return tag.rsplit("}", 1)[1]
-    return tag
-
-
-def looks_like_time(value: str) -> bool:
-    try:
-        float(value)
-    except ValueError:
-        return False
-    return True
-
-
-def read_txt_values(path: Path) -> list[str]:
-    values: list[str] = []
-    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        parts = line.split("\t")
-        if len(parts) >= 3 and looks_like_time(parts[0]) and looks_like_time(parts[1]):
-            text = "\t".join(parts[2:]).strip()
-        elif len(parts) >= 4 and looks_like_time(parts[1]) and looks_like_time(parts[2]):
-            text = "\t".join(parts[3:]).strip()
-        else:
-            text = line
-        if text:
-            values.append(text)
-    return values
-
-
-def find_transcription_paths(data_root: Path, patterns: list[str]) -> list[Path]:
-    paths: set[Path] = set()
-    for pattern in patterns:
-        paths.update(path for path in data_root.glob(pattern) if path.is_file())
-        if "**" not in pattern:
-            paths.update(path for path in data_root.rglob(pattern) if path.is_file())
-    return sorted(paths)
-
-
-def read_data_roots(config: dict[str, Any], project_dir: Path) -> list[Path]:
-    if "data_roots" in config:
-        raw_roots = require_list(config, "data_roots", [])
-    elif "data_root" in config:
-        raw_roots = [str(config["data_root"])]
-    else:
-        raise ValueError("Config must define data_root or data_roots")
-    if not raw_roots:
-        raise ValueError("Config data_roots must not be empty")
-    return [resolve_path(raw_root, project_dir) for raw_root in raw_roots]
-
-
-def matching_data_root(path: Path, data_roots: list[Path]) -> Path:
-    matches: list[Path] = []
-    for data_root in data_roots:
-        try:
-            path.relative_to(data_root)
-        except ValueError:
-            continue
-        matches.append(data_root)
-    if not matches:
-        raise ValueError(f"{path} is not under any configured data root")
-    return max(matches, key=lambda item: len(item.parts))
-
-
-def relative_to_data_roots(path: Path, data_roots: list[Path]) -> Path:
-    return path.relative_to(matching_data_root(path, data_roots))
-
-
-def recording_key(path: Path) -> str:
-    stem = path.stem
-    if path.suffix.lower() == ".txt":
-        return re.sub(r"-[A-Z]$", "", stem)
-    return stem
-
-
-def choose_transcription_paths(paths: list[Path], prefer_eaf: bool) -> list[TranscriptionPath]:
-    if not prefer_eaf:
-        return [
-            TranscriptionPath(path=path, source_type=path.suffix.lower().lstrip("."), selected=True)
-            for path in paths
-        ]
-
-    grouped: dict[str, list[Path]] = {}
-    for path in paths:
-        grouped.setdefault(recording_key(path), []).append(path)
-
-    chosen: list[TranscriptionPath] = []
-    for group_paths in grouped.values():
-        eaf_paths = sorted(path for path in group_paths if path.suffix.lower() == ".eaf")
-        txt_paths = sorted(path for path in group_paths if path.suffix.lower() == ".txt")
-        if eaf_paths:
-            chosen.extend(
-                TranscriptionPath(path=path, source_type="eaf", selected=True)
-                for path in eaf_paths
-            )
-            chosen.extend(
-                TranscriptionPath(
-                    path=path,
-                    source_type="txt",
-                    selected=False,
-                    warning="matching EAF selected; TXT skipped",
-                )
-                for path in txt_paths
-            )
-        else:
-            chosen.extend(
-                TranscriptionPath(path=path, source_type="txt", selected=True)
-                for path in txt_paths
-            )
-    return sorted(chosen, key=lambda item: item.path)
+def build_policy(config: dict[str, Any]) -> dict[str, Any]:
+    chars_to_remove = optional_list(config, "chars_to_remove")
+    if chars_to_remove is None:
+        chars_to_remove = optional_list(config, "remove_chars") or []
+    return {
+        "normalization_steps": require_list(config, "normalization_steps", []),
+        "sequence_replacements": parse_replacement_rules(
+            require_list(config, "sequence_replacements", [])
+        ),
+        "tone_replacements": parse_replacement_rules(
+            require_list(config, "tone_replacements", [])
+        ),
+        "remove_bracketed_text": bool(config.get("remove_bracketed_text", True)),
+        "replace_sequences": bool(config.get("replace_sequences", True)),
+        "map_tones": bool(config.get("map_tones", True)),
+        "lowercase_text": bool(config.get("lowercase_text", False)),
+        "remove_chars": bool(config.get("remove_chars", True)),
+        "chars_to_remove": chars_to_remove,
+        "collapse_whitespace": bool(config.get("collapse_whitespace", True)),
+        "strip_spaces": bool(config.get("strip_spaces", True)),
+    }
 
 
 def normalise_text(text: str, policy: dict[str, Any]) -> str:
@@ -296,8 +343,8 @@ def normalise_text(text: str, policy: dict[str, Any]) -> str:
                 text = re.sub(r"\([^)]*\)", " ", text)
         elif step == "remove_chars":
             if policy["remove_chars"]:
-                chars_to_remove = set(policy["chars_to_remove"])
-                text = "".join("" if char in chars_to_remove else char for char in text)
+                removed = set(policy["chars_to_remove"])
+                text = "".join("" if char in removed else char for char in text)
         elif step == "replace_sequences":
             if policy["replace_sequences"]:
                 text = replace_by_rules(text, policy["sequence_replacements"])
@@ -308,146 +355,339 @@ def normalise_text(text: str, policy: dict[str, Any]) -> str:
             if policy["map_tones"]:
                 text = replace_by_rules(text, policy["tone_replacements"])
         elif step == "collapse_whitespace":
-            text = re.sub(r"\s+", " ", text).strip() if policy["collapse_whitespace"] else text
+            if policy["collapse_whitespace"]:
+                text = re.sub(r"\s+", " ", text).strip()
         elif step == "strip_spaces":
-            text = re.sub(r"\s+", "", text) if policy["strip_spaces"] else text
+            if policy["strip_spaces"]:
+                text = re.sub(r"\s+", "", text)
         else:
             raise ValueError(f"Unknown normalization step: {step}")
     return text
 
 
-def output_path_for(source_path: Path, data_root: Path, eaf_output_dir: Path) -> Path:
-    relative = source_path.relative_to(data_root)
-    return eaf_output_dir / relative.with_suffix(".eaf")
+def strip_namespace(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
 
 
-def skipped_txt_result(source_path: Path, warning: str) -> NormalisationResult:
+def select_names(
+    available: list[str], selectors: list[str], path: Path, kind: str
+) -> list[str]:
+    if selectors[0].casefold() == "all":
+        return available
+    selected: set[str] = set()
+    for requested in selectors:
+        matches = [name for name in available if name.casefold() == requested.casefold()]
+        if not matches:
+            names = ", ".join(repr(name) for name in available) or "<none>"
+            raise ValueError(
+                f"{path}: requested {kind} {requested!r} was not found; available: {names}"
+            )
+        if len(matches) > 1:
+            raise ValueError(f"{path}: requested {kind} {requested!r} is ambiguous")
+        selected.add(matches[0])
+    return [name for name in available if name in selected]
+
+
+def read_encoded_text(path: Path) -> EncodedText:
+    raw = path.read_bytes()
+    if raw.startswith(b"\xff\xfe"):
+        return EncodedText(raw[2:].decode("utf-16-le"), "utf-16-le", b"\xff\xfe")
+    if raw.startswith(b"\xfe\xff"):
+        return EncodedText(raw[2:].decode("utf-16-be"), "utf-16-be", b"\xfe\xff")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return EncodedText(raw[3:].decode("utf-8"), "utf-8", b"\xef\xbb\xbf")
+    return EncodedText(raw.decode("utf-8"), "utf-8", b"")
+
+
+def write_encoded_text(path: Path, content: str, encoded: EncodedText) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(encoded.bom + content.encode(encoded.encoding))
+
+
+def transform_eaf(
+    source_path: Path,
+    output_path: Path,
+    selectors: list[str],
+    transform: Callable[[str], str],
+    *,
+    dry_run: bool,
+) -> tuple[int, int, int, list[tuple[str, str]]]:
+    tree = ET.parse(source_path)
+    root = tree.getroot()
+    tiers = [element for element in root.iter() if strip_namespace(element.tag) == "TIER"]
+    tier_ids = [tier.get("TIER_ID", "") for tier in tiers]
+    chosen = set(select_names(tier_ids, selectors, source_path, "EAF tier"))
+    seen = changed = empty = 0
+    samples: list[tuple[str, str]] = []
+    for tier in tiers:
+        if tier.get("TIER_ID", "") not in chosen:
+            continue
+        for element in tier.iter():
+            if strip_namespace(element.tag) != "ANNOTATION_VALUE":
+                continue
+            seen += 1
+            original = element.text or ""
+            updated = transform(original) if original else original
+            if original and not updated:
+                empty += 1
+            if updated != original:
+                changed += 1
+                if len(samples) < 10:
+                    samples.append((original, updated))
+                element.text = updated
+    if not dry_run:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        ET.register_namespace("xsi", "http://www.w3.org/2001/XMLSchema-instance")
+        tree.write(output_path, encoding="UTF-8", xml_declaration=True)
+    return seen, changed, empty, samples
+
+
+def unescape_textgrid(value: str) -> str:
+    return value.replace('""', '"')
+
+
+def transform_textgrid(
+    source_path: Path,
+    output_path: Path,
+    selectors: list[str],
+    transform: Callable[[str], str],
+    *,
+    dry_run: bool,
+) -> tuple[int, int, int, list[tuple[str, str]]]:
+    encoded = read_encoded_text(source_path)
+    lines = encoded.text.splitlines(keepends=True)
+    starts = [index for index, line in enumerate(lines) if TEXTGRID_ITEM_RE.match(line.rstrip("\r\n"))]
+    if not starts:
+        raise ValueError(f"{source_path}: expected Praat long text-format tier blocks")
+    tiers: list[tuple[str, int, int]] = []
+    for position, start in enumerate(starts):
+        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        tier_class = name = ""
+        for line in lines[start:end]:
+            bare = line.rstrip("\r\n")
+            if not tier_class:
+                match = TEXTGRID_CLASS_RE.match(bare)
+                if match:
+                    tier_class = unescape_textgrid(match.group(1))
+            if not name:
+                match = TEXTGRID_NAME_RE.match(bare)
+                if match:
+                    name = unescape_textgrid(match.group(1))
+        if tier_class not in {"IntervalTier", "TextTier"} or not name:
+            raise ValueError(f"{source_path}: malformed TextGrid tier at line {start + 1}")
+        tiers.append((name, start, end))
+    chosen = set(select_names([name for name, _, _ in tiers], selectors, source_path, "TextGrid tier"))
+    seen = changed = empty = 0
+    samples: list[tuple[str, str]] = []
+    for name, start, end in tiers:
+        if name not in chosen:
+            continue
+        for index in range(start, end):
+            match = TEXTGRID_VALUE_RE.match(lines[index])
+            if not match:
+                continue
+            seen += 1
+            original = unescape_textgrid(match.group(2))
+            updated = transform(original) if original else original
+            if original and not updated:
+                empty += 1
+            if updated != original:
+                changed += 1
+                if len(samples) < 10:
+                    samples.append((original, updated))
+                escaped = updated.replace('"', '""')
+                lines[index] = match.group(1) + escaped + match.group(3) + (match.group(4) or "")
+    if not dry_run:
+        write_encoded_text(output_path, "".join(lines), encoded)
+    return seen, changed, empty, samples
+
+
+def table_settings(config: dict[str, Any], source_type: str) -> tuple[str, bool, list[str]]:
+    name = source_type.lstrip(".")
+    column_key = f"{name}_text_column"
+    if column_key not in config:
+        raise ValueError(f"{column_key} must be configured when selecting {source_type}")
+    selectors = configured_selector(config[column_key], column_key)
+    has_header = bool(config.get(f"{name}_has_header", source_type == ".csv"))
+    if source_type == ".csv":
+        delimiter = ","
+    elif source_type == ".tsv":
+        delimiter = "\t"
+    else:
+        raw_delimiter = str(config.get("txt_delimiter", "")).strip()
+        delimiter = {"tab": "\t", "comma": ","}.get(raw_delimiter.casefold(), raw_delimiter)
+        if len(delimiter) != 1:
+            raise ValueError("txt_delimiter must be 'tab', 'comma', or one character")
+    return delimiter, has_header, selectors
+
+
+def select_column_indices(
+    selectors: list[str], header: list[str] | None, width: int, path: Path
+) -> list[int]:
+    if selectors[0].casefold() == "all":
+        return list(range(width))
+    indices: set[int] = set()
+    for selector in selectors:
+        if selector.isdecimal():
+            index = int(selector) - 1
+            if index < 0 or index >= width:
+                raise ValueError(f"{path}: column {selector} is outside 1..{width}")
+            indices.add(index)
+            continue
+        if header is None:
+            raise ValueError(f"{path}: headerless tables require numeric column selectors")
+        matches = [index for index, name in enumerate(header) if name.casefold() == selector.casefold()]
+        if not matches:
+            available = ", ".join(repr(name) for name in header) or "<none>"
+            raise ValueError(f"{path}: column {selector!r} not found; available: {available}")
+        if len(matches) > 1:
+            raise ValueError(f"{path}: column {selector!r} is ambiguous")
+        indices.add(matches[0])
+    return sorted(indices)
+
+
+def transform_table(
+    source_path: Path,
+    output_path: Path,
+    delimiter: str,
+    has_header: bool,
+    selectors: list[str],
+    transform: Callable[[str], str],
+    *,
+    dry_run: bool,
+) -> tuple[int, int, int, list[tuple[str, str]]]:
+    encoded = read_encoded_text(source_path)
+    rows = list(csv.reader(io.StringIO(encoded.text, newline=""), delimiter=delimiter))
+    if not rows:
+        raise ValueError(f"{source_path}: table is empty")
+    width = len(rows[0])
+    header = rows[0] if has_header else None
+    indices = select_column_indices(selectors, header, width, source_path)
+    first_data_row = 1 if has_header else 0
+    seen = changed = empty = 0
+    samples: list[tuple[str, str]] = []
+    for row_number, row in enumerate(rows[first_data_row:], start=first_data_row + 1):
+        if len(row) != width:
+            raise ValueError(
+                f"{source_path}:{row_number}: expected {width} columns, found {len(row)}"
+            )
+        for index in indices:
+            seen += 1
+            original = row[index]
+            updated = transform(original) if original else original
+            if original and not updated:
+                empty += 1
+            if updated != original:
+                changed += 1
+                if len(samples) < 10:
+                    samples.append((original, updated))
+                row[index] = updated
+    if not dry_run:
+        newline = "\r\n" if "\r\n" in encoded.text else "\n"
+        buffer = io.StringIO(newline="")
+        writer = csv.writer(buffer, delimiter=delimiter, lineterminator=newline)
+        writer.writerows(rows)
+        write_encoded_text(output_path, buffer.getvalue(), encoded)
+    return seen, changed, empty, samples
+
+
+def selectors_for(config: dict[str, Any], source_type: str) -> tuple[list[str], str]:
+    if source_type == ".eaf":
+        selectors = configured_selector(config.get("eaf_tier", "all"), "eaf_tier")
+    elif source_type == ".textgrid":
+        selectors = configured_selector(config.get("textgrid_tier", "all"), "textgrid_tier")
+    else:
+        _, _, selectors = table_settings(config, source_type)
+    return selectors, selector_text(selectors)
+
+
+def transform_source(
+    selection: SourceSelection,
+    output_path: Path,
+    config: dict[str, Any],
+    transform: Callable[[str], str],
+    *,
+    dry_run: bool,
+) -> NormalisationResult:
+    selectors, rendered_selector = selectors_for(config, selection.source_type)
+    if selection.source_type == ".eaf":
+        counts = transform_eaf(selection.path, output_path, selectors, transform, dry_run=dry_run)
+    elif selection.source_type == ".textgrid":
+        counts = transform_textgrid(selection.path, output_path, selectors, transform, dry_run=dry_run)
+    else:
+        delimiter, has_header, selectors = table_settings(config, selection.source_type)
+        counts = transform_table(
+            selection.path,
+            output_path,
+            delimiter,
+            has_header,
+            selectors,
+            transform,
+            dry_run=dry_run,
+        )
+    seen, changed, empty, samples = counts
     return NormalisationResult(
-        source_path=source_path,
+        source_path=selection.path,
+        data_root=selection.data_root,
+        output_path=output_path,
+        run_dir=output_path.parents[len(selection.path.relative_to(selection.data_root).parts) - 1],
+        source_type=selection.source_type,
+        selected=True,
+        selector=rendered_selector,
+        annotations_seen=seen,
+        annotations_changed=changed,
+        empty_after_normalisation_count=empty,
+        warnings=[],
+        samples=samples,
+    )
+
+
+def skipped_result(selection: SourceSelection) -> NormalisationResult:
+    return NormalisationResult(
+        source_path=selection.path,
+        data_root=selection.data_root,
         output_path=None,
-        source_type="txt",
+        run_dir=None,
+        source_type=selection.source_type,
+        selected=False,
+        selector="",
         annotations_seen=0,
         annotations_changed=0,
         empty_after_normalisation_count=0,
-        warnings=[warning],
+        warnings=[selection.warning],
         samples=[],
     )
 
 
-def normalise_eaf(
-    source_path: Path,
-    output_path: Path,
-    data_root: Path,
-    policy: dict[str, Any],
-    *,
-    dry_run: bool,
-) -> NormalisationResult:
-    warnings: list[str] = []
-    samples: list[tuple[str, str]] = []
-    tree = ET.parse(source_path)
-    root = tree.getroot()
-
-    annotations_seen = 0
-    annotations_changed = 0
-    empty_after = 0
-
-    for element in root.iter():
-        if strip_namespace(element.tag) != "ANNOTATION_VALUE":
-            continue
-        annotations_seen += 1
-        original = element.text or ""
-        if original == "":
-            continue
-        normalised = normalise_text(original, policy)
-        if normalised == "":
-            empty_after += 1
-        if normalised != original:
-            annotations_changed += 1
-            if len(samples) < 10:
-                samples.append((original, normalised))
-            if not dry_run:
-                element.text = normalised
-
-    if not dry_run:
-        ET.register_namespace("xsi", "http://www.w3.org/2001/XMLSchema-instance")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        tree.write(output_path, encoding="UTF-8", xml_declaration=True)
-
-    return NormalisationResult(
-        source_path=source_path,
-        output_path=output_path,
-        source_type="eaf",
-        annotations_seen=annotations_seen,
-        annotations_changed=annotations_changed,
-        empty_after_normalisation_count=empty_after,
-        warnings=warnings,
-        samples=samples,
-    )
-
-
-def summarise_txt(
-    source_path: Path,
-    policy: dict[str, Any],
-    warning: str,
-) -> NormalisationResult:
-    values = read_txt_values(source_path)
-    annotations_changed = 0
-    empty_after = 0
-    samples: list[tuple[str, str]] = []
-    for value in values:
-        normalised = normalise_text(value, policy)
-        if normalised == "":
-            empty_after += 1
-        if normalised != value:
-            annotations_changed += 1
-            if len(samples) < 10:
-                samples.append((value, normalised))
-    warnings = [warning] if warning else ["TXT fallback summarised only; no EAF output written"]
-    return NormalisationResult(
-        source_path=source_path,
-        output_path=None,
-        source_type="txt",
-        annotations_seen=len(values),
-        annotations_changed=annotations_changed,
-        empty_after_normalisation_count=empty_after,
-        warnings=warnings,
-        samples=samples,
-    )
+def current_timestamp() -> str:
+    return datetime.now().astimezone().strftime("%Y-%m-%d-%H-%M-%S")
 
 
 def write_summary_csv(
-    path: Path,
-    results: list[NormalisationResult],
-    data_roots: list[Path],
-    project_dir: Path,
+    path: Path, results: list[NormalisationResult], run_timestamp: str
 ) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as file_obj:
-        writer = csv.DictWriter(
-            file_obj,
-            fieldnames=[
-                "source_path",
-                "output_path",
-                "source_type",
-                "annotations_seen",
-                "annotations_changed",
-                "empty_after_normalisation_count",
-                "warnings",
-            ],
-        )
+    path.parent.mkdir(parents=True, exist_ok=False)
+    with path.open("x", encoding="utf-8", newline="") as handle:
+        fields = [
+            "run_timestamp", "data_root", "source_path", "selected", "source_type",
+            "selector", "output_path", "annotations_seen", "annotations_changed",
+            "empty_after_normalisation_count", "warnings",
+        ]
+        writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for result in results:
             writer.writerow(
                 {
-                    "source_path": relative_to_data_roots(
-                        result.source_path, data_roots
-                    ).as_posix(),
-                    "output_path": (
-                        result.output_path.relative_to(project_dir).as_posix()
-                        if result.output_path
-                        else ""
-                    ),
+                    "run_timestamp": run_timestamp,
+                    "data_root": result.data_root.as_posix(),
+                    "source_path": result.source_path.relative_to(result.data_root).as_posix(),
+                    "selected": str(result.selected).lower(),
                     "source_type": result.source_type,
+                    "selector": result.selector,
+                    "output_path": (
+                        result.output_path.relative_to(result.run_dir).as_posix()
+                        if result.output_path and result.run_dir else ""
+                    ),
                     "annotations_seen": result.annotations_seen,
                     "annotations_changed": result.annotations_changed,
                     "empty_after_normalisation_count": result.empty_after_normalisation_count,
@@ -456,122 +696,102 @@ def write_summary_csv(
             )
 
 
-def build_policy(config: dict[str, Any]) -> dict[str, Any]:
-    chars_to_remove = optional_list(config, "chars_to_remove")
-    if chars_to_remove is None:
-        chars_to_remove = optional_list(config, "remove_chars") or []
-    return {
-        "normalization_steps": require_list(config, "normalization_steps", []),
-        "sequence_replacements": parse_replacement_rules(
-            require_list(config, "sequence_replacements", [])
-        ),
-        "tone_replacements": parse_replacement_rules(require_list(config, "tone_replacements", [])),
-        "remove_bracketed_text": bool(config.get("remove_bracketed_text", True)),
-        "replace_sequences": bool(config.get("replace_sequences", True)),
-        "map_tones": bool(config.get("map_tones", True)),
-        "lowercase_text": bool(config.get("lowercase_text", False)),
-        "remove_chars": bool(config.get("remove_chars", config.get("remove_punctuation", True))),
-        "chars_to_remove": chars_to_remove,
-        "collapse_whitespace": bool(config.get("collapse_whitespace", True)),
-        "strip_spaces": bool(config.get("strip_spaces", True)),
-    }
+def run_normalisation(
+    config: dict[str, Any],
+    config_path: Path,
+    *,
+    dry_run: bool,
+    timestamp: str | None = None,
+) -> tuple[list[NormalisationResult], dict[Path, Path], Path]:
+    validate_config(config)
+    project_dir = config_path.resolve().parent.parent
+    data_roots = read_data_roots(config, project_dir)
+    formats = preferred_formats(config)
+    patterns = require_list(config, "transcription_globs", ["**/*"])
+    selections = discover_sources(data_roots, patterns, formats)
+    selected = [item for item in selections if item.selected]
+    if not selected:
+        raise ValueError("No transcription files matched the selected prefer formats")
 
+    timestamp = timestamp or current_timestamp()
+    if not RUN_TIMESTAMP_RE.fullmatch(timestamp):
+        raise ValueError(f"Invalid run timestamp: {timestamp}")
+    active_roots = sorted({item.data_root for item in selected})
+    run_dirs = {root: root / "normalised" / timestamp for root in active_roots}
+    language = str(config.get("language", "language"))
+    if language in {"", ".", ".."} or Path(language).name != language:
+        raise ValueError("language must be a single non-empty path segment")
+    logs_root = resolve_path(config.get("logs_dir", "output/logs"), project_dir)
+    log_dir = logs_root / language / timestamp
+    destinations = [*run_dirs.values(), log_dir]
+    existing = [path for path in destinations if path.exists()]
+    if existing:
+        raise FileExistsError("Timestamped destination already exists: " + ", ".join(map(str, existing)))
 
-def print_dry_run(results: list[NormalisationResult]) -> None:
-    total_seen = sum(result.annotations_seen for result in results)
-    total_changed = sum(result.annotations_changed for result in results)
-    total_empty = sum(result.empty_after_normalisation_count for result in results)
-    print("Dry run: no files written.")
-    print(f"Sources summarised: {len(results)}")
-    print(f"Annotations seen: {total_seen}")
-    print(f"Annotations changed: {total_changed}")
-    print(f"Empty after normalisation: {total_empty}")
-    print()
-    for result in results:
-        print(
-            f"{result.source_type}: {result.source_path} "
-            f"seen={result.annotations_seen} changed={result.annotations_changed}"
+    policy = build_policy(config)
+    transform = lambda text: normalise_text(text, policy)
+
+    # Parse and validate every selected source before creating any destination.
+    preview_results: list[NormalisationResult] = []
+    for selection in selections:
+        if not selection.selected:
+            preview_results.append(skipped_result(selection))
+            continue
+        relative = selection.path.relative_to(selection.data_root)
+        output_path = run_dirs[selection.data_root] / relative
+        preview_results.append(
+            transform_source(selection, output_path, config, transform, dry_run=True)
         )
-        for original, normalised in result.samples[:3]:
-            print(f"  {original} -> {normalised}")
-        for warning in result.warnings:
-            print(f"  warning: {warning}")
+
+    if dry_run:
+        return preview_results, run_dirs, log_dir
+
+    for run_dir in run_dirs.values():
+        run_dir.mkdir(parents=True, exist_ok=False)
+
+    results: list[NormalisationResult] = []
+    for selection in selections:
+        if not selection.selected:
+            results.append(skipped_result(selection))
+            continue
+        relative = selection.path.relative_to(selection.data_root)
+        output_path = run_dirs[selection.data_root] / relative
+        results.append(
+            transform_source(selection, output_path, config, transform, dry_run=False)
+        )
+
+    summary_path = log_dir / f"{language}_normalisation_summary.csv"
+    write_summary_csv(summary_path, results, timestamp)
+    return results, run_dirs, log_dir
+
+
+def print_results(
+    results: list[NormalisationResult], run_dirs: dict[Path, Path], log_dir: Path, dry_run: bool
+) -> None:
+    prefix = "Dry run: no files or logs written.\n" if dry_run else ""
+    if prefix:
+        print(prefix, end="")
+    print(f"Selected files: {sum(result.selected for result in results)}")
+    print(f"Skipped files: {sum(not result.selected for result in results)}")
+    print(f"Annotations/cells seen: {sum(result.annotations_seen for result in results)}")
+    print(f"Annotations/cells changed: {sum(result.annotations_changed for result in results)}")
+    for root, run_dir in run_dirs.items():
+        print(f"Normalised data for {root}: {run_dir}")
+    print(f"Logs: {log_dir}")
+    if dry_run:
+        for result in results:
+            for original, updated in result.samples[:3]:
+                print(f"  {result.source_path}: {original} -> {updated}")
 
 
 def main() -> None:
     args = parse_args()
     config_path = args.config.resolve()
-    project_dir = config_path.parent.parent
     config = read_simple_yaml(config_path)
-    policy = build_policy(config)
-
-    data_roots = read_data_roots(config, project_dir)
-    transcription_globs = require_list(config, "transcription_globs", ["*.eaf", "*.txt"])
-    prefer_eaf = bool(config.get("prefer_eaf", True))
-    output_dir = resolve_path(
-        format_config_template(config.get("output_dir", "output"), config),
-        project_dir,
+    results, run_dirs, log_dir = run_normalisation(
+        config, config_path, dry_run=args.dry_run
     )
-    eaf_output_dir = resolve_path(
-        format_config_template(config.get("eaf_output_dir", "output/eaf"), config),
-        project_dir,
-    )
-    summary_path = resolve_path(
-        format_config_template(
-            config.get("summary_csv_path", "output/logs/normalisation_summary.csv"),
-            config,
-        ),
-        project_dir,
-    )
-
-    paths = [
-        path
-        for data_root in data_roots
-        for path in find_transcription_paths(data_root, transcription_globs)
-        if path.suffix.lower() in {".eaf", ".txt"}
-    ]
-    transcription_paths = choose_transcription_paths(paths, prefer_eaf)
-
-    results: list[NormalisationResult] = []
-    for transcription_path in transcription_paths:
-        if transcription_path.source_type == "eaf" and transcription_path.selected:
-            data_root = matching_data_root(transcription_path.path, data_roots)
-            output_path = output_path_for(transcription_path.path, data_root, eaf_output_dir)
-            results.append(
-                normalise_eaf(
-                    transcription_path.path,
-                    output_path,
-                    data_root,
-                    policy,
-                    dry_run=args.dry_run,
-                )
-            )
-            continue
-        if transcription_path.source_type == "txt" and not transcription_path.selected:
-            results.append(
-                skipped_txt_result(transcription_path.path, transcription_path.warning)
-            )
-            continue
-        results.append(
-            summarise_txt(transcription_path.path, policy, transcription_path.warning)
-        )
-
-    if args.dry_run:
-        print_dry_run(results)
-        return
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    write_summary_csv(summary_path, results, data_roots, project_dir)
-
-    eaf_written = sum(1 for result in results if result.output_path)
-    eaf_changed = sum(
-        result.annotations_changed for result in results if result.output_path
-    )
-    total_changed = sum(result.annotations_changed for result in results)
-    print(f"Normalised EAF files written: {eaf_written}")
-    print(f"EAF annotations changed: {eaf_changed}")
-    print(f"Total annotations changed including TXT summaries: {total_changed}")
-    print(f"Summary CSV: {summary_path}")
+    print_results(results, run_dirs, log_dir, args.dry_run)
 
 
 if __name__ == "__main__":
