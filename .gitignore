@@ -6,3 +6,5 @@ output/undo/eaf/*
 
 __pycache__/
 *.pyc
+
+tests/*
