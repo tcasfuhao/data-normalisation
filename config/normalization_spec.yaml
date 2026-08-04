@@ -1,6 +1,6 @@
 language: yonghe_qiang_01
 data_roots:
-  - ~/projects/my-projects/asr-models/language-downloads/yonghe-qiang_01/normalised/2026-08-03-10-11-09
+  - ~/projects/my-projects/asr-models/language-downloads/yonghe-qiang_01/
 transcription_globs:
   - "*.txt"
   - "*.eaf"
@@ -32,10 +32,10 @@ logs_dir: logs
 remove_bracketed_text: false # Remove all text inside brackets, including the brackets themselves, and replaces the whole string with a single space
 remove_chars: true # Remove all characters in chars_to_remove below
 replace_sequences: true # Replace multi-character sequences with single-character symbols, as defined in sequence_replacements below
-lowercase_text: true
+lowercase_text: false
 map_tones: true
 collapse_whitespace: false # If there are multiple spaces in a row, replace them with a single space
-strip_spaces: true # Remove all whitespace
+strip_spaces: false # Remove all whitespace
 
 # Ordered, editable forward normalization pipeline.
 # The reverse pipeline is generated automatically where mappings are one-to-one.
