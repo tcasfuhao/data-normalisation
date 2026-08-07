@@ -34,7 +34,7 @@ remove_chars: true # Remove all characters in chars_to_remove below
 replace_sequences: true # Replace multi-character sequences with single-character symbols, as defined in sequence_replacements below
 lowercase_text: false
 map_tones: true
-collapse_whitespace: false # If there are multiple spaces in a row, replace them with a single space
+collapse_whitespace: True # If there are multiple spaces in a row, replace them with a single space
 strip_spaces: false # Remove all whitespace
 
 # Ordered, editable forward normalization pipeline.
