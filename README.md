@@ -2,11 +2,19 @@
 
 This folder normalises language transcription data without modifying its sources.
 
+## (Un)Required Conda environment
+
+This project does not require a dedicated environment, however, for consistency sake, we recommend using it regardless. The conda environemnt is `tcas_asr_python3.10`. Create it once with Python 3.10, then activate it before running any command:
+
+```bash
+conda create --name tcas_asr_python3.10 python=3.10
+conda activate tcas_asr_python3.10
+python -m pip install -r requirements.txt
+```
+
 ## Configuration
 
-Edit `config/normalization_spec.yaml` to set the source roots, file globs,
-normalisation policy, and selected formats. `prefer` is a set rather than a
-priority order: selecting both `.eaf` and `.TextGrid` processes both formats.
+Edit `config/normalization_spec.yaml` to set the source roots, file globs, normalisation policy, and selected formats. `prefer` is a set rather than a priority order: selecting both `.eaf` and `.TextGrid` processes both formats.
 
 ```yaml
 data_roots:
@@ -47,9 +55,7 @@ runs:
 logs/<language>/YYYY-MM-DD-HH-MM-SS/<language>_normalisation_summary.csv
 ```
 
-Generated `normalised` and `undone` directories are excluded from later source
-scans. Use `--dry-run` to inspect selections, destinations, counts, and sample
-changes without creating data or logs.
+Generated `normalised` and `undone` directories are excluded from later source scans. Use `--dry-run` to inspect selections, destinations, counts, and sample changes without creating data or logs.
 
 ## Undo reversible replacements
 
@@ -67,5 +73,4 @@ Undo supports EAF, TextGrid, CSV, TSV, and delimited TXT outputs. It writes to:
 <data_root>/undone/<normalise-timestamp>-<undo-timestamp>/
 ```
 
-Only configured one-to-one replacements can be reversed. Removed characters,
-whitespace changes, bracket removal, and case conversion cannot be reconstructed.
+Only configured one-to-one replacements can be reversed. Removed characters, whitespace changes, bracket removal, and case conversion cannot be reconstructed.
