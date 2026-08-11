@@ -1,6 +1,6 @@
-language: yonghe_qiang_01
+language: yongning-na_01
 data_roots:
-  - ~/projects/my-projects/asr-models/language-downloads/yonghe-qiang_01/
+  -  ~/projects/my-projects/asr-models/language-downloads/yongning-na_01/doreco_yong1270_core_v2.0/
 transcription_globs:
   - "*.txt"
   - "*.eaf"
@@ -8,12 +8,12 @@ transcription_globs:
   - "*.csv"
   - "*.tsv"
 
-# Every discovered format listed here is normalised; this is not a fallback order.
+# Every discovered format listed in the prefer section is normalised. Those not listed are ignored and documented in the logs.
 prefer:
   - ".eaf"
 
 # Structured transcription selectors accept one name, a list of names, or all.
-eaf_tier: all
+eaf_tier: W-0
 textgrid_tier: all
 
 # Delimited-table selectors accept header names, 1-based column numbers, or all.
@@ -29,7 +29,7 @@ txt_text_column: 4
 logs_dir: logs
 
 # Current default policy for ASR training text.
-remove_bracketed_text: false # Remove all text inside brackets, including the brackets themselves, and replaces the whole string with a single space
+remove_bracketed_text: true # Remove all text inside brackets, including the brackets themselves, and replaces the whole string with a single space. Go to line 341 in scripts/normalise_data.py to add more bracket types if needed.
 remove_chars: true # Remove all characters in chars_to_remove below
 replace_sequences: true # Replace multi-character sequences with single-character symbols, as defined in sequence_replacements below
 lowercase_text: false
@@ -48,27 +48,6 @@ normalization_steps:
   - collapse_whitespace
   - strip_spaces
 
-# Multi-character transcription symbols can be made single-character here.
-# Format: "source=>target"
-sequence_replacements:
-  - "tʰ=>þ"
-  - "kʰ=>ƙ"
-  - "pʰ=>ƥ"
-  - "tsʰ=>ƾ"
-  - "tʂʰ=>ƪ"
-  - "tɕʰ=>ƫ"
-  - "qʰ=>ƣ"
-  - "ɕʰ=>Ƭ"
-  - ",=> "
-
-# Tone numbers can be mapped to single machine-trainable symbols.
-# Format: "source=>target"
-tone_replacements:
-  - "33=>M"
-  - "35=>R"
-  - "53=>F"
-  - "55=>H"
-
 chars_to_remove: # When remove_chars is true, these characters will be removed from the text
   - "."
   - "?"
@@ -77,3 +56,38 @@ chars_to_remove: # When remove_chars is true, these characters will be removed f
   - "("
   - ")"
   - "#"
+  - "$"
+  - "~"
+  - "."
+  - "="
+  - "*"
+
+# Multi-character transcription symbols can be made single-character here.
+# Format: "source=>target"
+sequence_replacements:
+  - "tʰ=>þ"
+  - "kʰ=>ƙ"
+  - "pʰ=>ƥ"
+#  - "sʰ=>ƨ"
+  - "ʈʰ=>Ʈ"
+  - "qʰ=>ƣ"
+#  - "ɕʰ=>Ƭ"
+#  - "ʂʰ=>Ʃ"
+#  - "tsʰ=>ƾ"
+  - "tʂʰ=>ƪ"
+  - "tɕʰ=>ƫ"
+  - ",=> "
+
+# Tone numbers can be mapped to single machine-trainable symbols.
+# Format: "source=>target"
+tone_replacements:
+#  - "33=>M"
+#  - "35=>R"
+#  - "53=>F"
+#  - "55=>H"
+  - "˥=>H"
+  - "˧=>M"
+  - "˩=>L"
+  - "˧˥=>Q"
+  - "˩˥=>W"
+  - "˩˧=>E"
