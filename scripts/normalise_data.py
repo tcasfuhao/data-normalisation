@@ -341,6 +341,8 @@ def normalise_text(text: str, policy: dict[str, Any]) -> str:
             if policy["remove_bracketed_text"]:
                 text = re.sub(r"\[[^\]]*\]", " ", text)
                 text = re.sub(r"\([^)]*\)", " ", text)
+                text = re.sub(r"\{[^}]*\}", " ", text)
+                text = re.sub(r"<[^>]*>", " ", text)
         elif step == "remove_chars":
             if policy["remove_chars"]:
                 removed = set(policy["chars_to_remove"])
