@@ -29,7 +29,7 @@ txt_text_column: 4
 logs_dir: logs
 
 # Current default policy for ASR training text.
-remove_bracketed_text: true # Remove all text inside brackets, including the brackets themselves, and replaces the whole string with a single space. Go to line 341 in scripts/normalise_data.py to add more bracket types if needed.
+remove_bracketed_text: true # Remove complete, balanced [], (), {}, and <> spans, including nested spans. Go to line 341 in scripts/normalise_data.py to add more bracket types if needed.
 remove_chars: true # Remove all characters in chars_to_remove below
 replace_sequences: true # Replace multi-character sequences with single-character symbols, as defined in sequence_replacements below
 lowercase_text: false
@@ -61,6 +61,7 @@ chars_to_remove: # When remove_chars is true, these characters will be removed f
   - "."
   - "="
   - "*"
+  - "-"
 
 # Multi-character transcription symbols can be made single-character here.
 # Format: "source=>target"
@@ -73,8 +74,8 @@ sequence_replacements:
   - "qʰ=>ƣ"
 #  - "ɕʰ=>Ƭ"
 #  - "ʂʰ=>Ʃ"
-#  - "tsʰ=>ƾ"
-  - "tʂʰ=>ƪ"
+  - "tsʰ=>ƾ"
+  - "ʈʂʰ=>ƪ"
   - "tɕʰ=>ƫ"
   - ",=> "
 
