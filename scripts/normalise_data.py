@@ -312,6 +312,43 @@ def replace_by_rules(text: str, rules: list[tuple[str, str]]) -> str:
     return text
 
 
+def remove_balanced_spans(text: str, opener: str, closer: str) -> str:
+    """Replace complete, possibly nested bracketed spans with one space.
+
+    An unmatched opening or closing bracket is retained so malformed input does
+    not cause the surrounding transcription to be deleted accidentally.
+    """
+    parts: list[str] = []
+    cursor = 0
+    span_start: int | None = None
+    depth = 0
+
+    for index, char in enumerate(text):
+        if char == opener:
+            if depth == 0:
+                parts.append(text[cursor:index])
+                span_start = index
+            depth += 1
+        elif char == closer and depth > 0:
+            depth -= 1
+            if depth == 0:
+                parts.append(" ")
+                cursor = index + 1
+                span_start = None
+
+    if depth > 0:
+        parts.append(text[span_start:])
+    else:
+        parts.append(text[cursor:])
+    return "".join(parts)
+
+
+def remove_balanced_bracketed_text(text: str) -> str:
+    for opener, closer in (("[", "]"), ("(", ")"), ("{", "}"), ("<", ">")):
+        text = remove_balanced_spans(text, opener, closer)
+    return text
+
+
 def build_policy(config: dict[str, Any]) -> dict[str, Any]:
     chars_to_remove = optional_list(config, "chars_to_remove")
     if chars_to_remove is None:
@@ -339,10 +376,7 @@ def normalise_text(text: str, policy: dict[str, Any]) -> str:
     for step in policy["normalization_steps"]:
         if step == "remove_bracketed_text":
             if policy["remove_bracketed_text"]:
-                text = re.sub(r"\[[^\]]*\]", " ", text)
-                text = re.sub(r"\([^)]*\)", " ", text)
-                text = re.sub(r"\{[^}]*\}", " ", text)
-                text = re.sub(r"<[^>]*>", " ", text)
+                text = remove_balanced_bracketed_text(text)
         elif step == "remove_chars":
             if policy["remove_chars"]:
                 removed = set(policy["chars_to_remove"])
