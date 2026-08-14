@@ -14,7 +14,7 @@ python -m pip install -r requirements.txt
 
 ## Configuration
 
-Edit `config/normalization_spec.yaml` to set the source roots, file globs, normalisation policy, and selected formats. `prefer` is a set rather than a priority order: selecting both `.eaf` and `.TextGrid` processes both formats.
+Edit `config/normalisation_spec.yaml` to set the source roots, file globs, normalisation policy, and selected formats. `prefer` is a set rather than a priority order: selecting both `.eaf` and `.TextGrid` processes both formats.
 
 ```yaml
 data_roots:
@@ -44,7 +44,7 @@ Tier and column selectors accept one value, a YAML list, or `all`. Column names 
 ## Run
 
 ```bash
-python scripts/normalise_data.py --config config/normalization_spec.yaml
+python scripts/normalise_data.py --config config/normalisation_spec.yaml
 ```
 
 Each run uses one local-time timestamp and writes data without overwriting earlier
@@ -62,9 +62,7 @@ Generated `normalised` and `undone` directories are excluded from later source s
 Pass each exact normalisation run explicitly; `--run-dir` can be repeated:
 
 ```bash
-python scripts/undoing_changes.py \
-  --config config/normalization_spec.yaml \
-  --run-dir /path/to/data/normalised/2026-07-31-14-20-05
+python scripts/undoing_changes.py --config config/normalisation_spec.yaml --run-dir /path/to/data/normalised/2026-07-31-14-20-05
 ```
 
 Undo supports EAF, TextGrid, CSV, TSV, and delimited TXT outputs. It writes to:

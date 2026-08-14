@@ -21,7 +21,7 @@ from normalise_data import (
 )
 
 
-DEFAULT_CONFIG = Path("config/normalization_spec.yaml")
+DEFAULT_CONFIG = Path("config/normalisation_spec.yaml")
 
 
 @dataclass(frozen=True)
@@ -73,7 +73,7 @@ def describe_run(run_dir: Path, undo_timestamp: str) -> UndoRun:
     if run_dir.parent.name.casefold() != "normalised":
         raise ValueError(f"Run directory must be directly below a normalised folder: {run_dir}")
     if not RUN_TIMESTAMP_RE.fullmatch(run_dir.name):
-        raise ValueError(f"Run directory name is not a normalization timestamp: {run_dir.name}")
+        raise ValueError(f"Run directory name is not a normalisation timestamp: {run_dir.name}")
     data_root = run_dir.parent.parent
     output_dir = data_root / "undone" / f"{run_dir.name}-{undo_timestamp}"
     return UndoRun(run_dir, data_root, run_dir.name, output_dir)
@@ -118,7 +118,7 @@ def run_undo(
     transform = lambda text: replace_by_rules(text, rules)
     sources_by_run = [(run, find_run_sources(run)) for run in runs]
     if not any(sources for _, sources in sources_by_run):
-        raise ValueError("No supported files were found in the selected normalization runs")
+        raise ValueError("No supported files were found in the selected normalisation runs")
     # Validate every file and selector before creating any undo destination.
     preview_results: list[object] = []
     for run, sources in sources_by_run:

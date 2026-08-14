@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-DEFAULT_CONFIG = Path("config/normalization_spec.yaml")
+DEFAULT_CONFIG = Path("config/normalisation_spec.yaml")
 SUPPORTED_FORMATS = {".eaf", ".textgrid", ".csv", ".tsv", ".txt"}
 RESERVED_DIRECTORIES = {"normalised", "undone"}
 OBSOLETE_KEYS = {"prefer_eaf", "output_dir", "eaf_output_dir", "summary_csv_path"}
@@ -354,7 +354,7 @@ def build_policy(config: dict[str, Any]) -> dict[str, Any]:
     if chars_to_remove is None:
         chars_to_remove = optional_list(config, "remove_chars") or []
     return {
-        "normalization_steps": require_list(config, "normalization_steps", []),
+        "normalisation_steps": require_list(config, "normalisation_steps", []),
         "sequence_replacements": parse_replacement_rules(
             require_list(config, "sequence_replacements", [])
         ),
@@ -373,7 +373,7 @@ def build_policy(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def normalise_text(text: str, policy: dict[str, Any]) -> str:
-    for step in policy["normalization_steps"]:
+    for step in policy["normalisation_steps"]:
         if step == "remove_bracketed_text":
             if policy["remove_bracketed_text"]:
                 text = remove_balanced_bracketed_text(text)
@@ -397,7 +397,7 @@ def normalise_text(text: str, policy: dict[str, Any]) -> str:
             if policy["strip_spaces"]:
                 text = re.sub(r"\s+", "", text)
         else:
-            raise ValueError(f"Unknown normalization step: {step}")
+            raise ValueError(f"Unknown normalisation step: {step}")
     return text
 
 
