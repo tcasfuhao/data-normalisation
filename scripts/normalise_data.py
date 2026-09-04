@@ -353,8 +353,14 @@ def build_policy(config: dict[str, Any]) -> dict[str, Any]:
     chars_to_remove = optional_list(config, "chars_to_remove")
     if chars_to_remove is None:
         chars_to_remove = optional_list(config, "remove_chars") or []
+    normalisation_steps = require_list(config, "normalisation_steps", [])
+    if not normalisation_steps:
+        normalisation_steps = require_list(config, "normalization_steps", [])
+    drop_sentence_if_contains = require_list(config, "drop_sentence_if_contains", [])
+    if any(not value for value in drop_sentence_if_contains):
+        raise ValueError("drop_sentence_if_contains cannot contain an empty value")
     return {
-        "normalisation_steps": require_list(config, "normalisation_steps", []),
+        "normalisation_steps": normalisation_steps,
         "sequence_replacements": parse_replacement_rules(
             require_list(config, "sequence_replacements", [])
         ),
@@ -367,6 +373,7 @@ def build_policy(config: dict[str, Any]) -> dict[str, Any]:
         "lowercase_text": bool(config.get("lowercase_text", False)),
         "remove_chars": bool(config.get("remove_chars", True)),
         "chars_to_remove": chars_to_remove,
+        "drop_sentence_if_contains": drop_sentence_if_contains,
         "collapse_whitespace": bool(config.get("collapse_whitespace", True)),
         "strip_spaces": bool(config.get("strip_spaces", True)),
     }
@@ -381,6 +388,9 @@ def normalise_text(text: str, policy: dict[str, Any]) -> str:
             if policy["remove_chars"]:
                 removed = set(policy["chars_to_remove"])
                 text = "".join("" if char in removed else char for char in text)
+        elif step == "drop_sentence_if_contains":
+            if any(value in text for value in policy["drop_sentence_if_contains"]):
+                return ""
         elif step == "replace_sequences":
             if policy["replace_sequences"]:
                 text = replace_by_rules(text, policy["sequence_replacements"])
