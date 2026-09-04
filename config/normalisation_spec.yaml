@@ -1,6 +1,12 @@
-language: yongning-na_01
+# language: japhug
+# language: yonghe_qiang
+language: yongning-na
+
 data_roots:
-  -  ~/projects/my-projects/asr-models/language-downloads/yongning-na_01/doreco_yong1270_core_v2.0/
+  # - ~/projects/my-projects/asr-models/language-downloads/japhug_01/japhug-tshendzin-16k-16
+  # - ~/projects/my-projects/asr-models/language-downloads/yonghe-qiang_01
+  - ~/projects/my-projects/asr-models/language-downloads/yongning-na_01/doreco_yong1270_core_v2.0/
+  
 transcription_globs:
   - "*.txt"
   - "*.eaf"
@@ -13,6 +19,7 @@ prefer:
   - ".eaf"
 
 # Structured transcription selectors accept one name, a list of names, or all.
+# eaf_tier: all
 eaf_tier: W-0
 textgrid_tier: all
 
@@ -29,21 +36,26 @@ txt_text_column: 4
 logs_dir: logs
 
 # Current default policy for ASR training text.
-remove_bracketed_text: true # Remove complete, balanced [], (), {}, and <> spans, including nested spans. Go to line 341 in scripts/normalise_data.py to add more bracket types if needed.
+remove_bracketed_text: true  # Remove complete, balanced [], (), {}, and <> spans, including nested spans. Go to line 341 in scripts/normalise_data.py to add more bracket types if needed.
 remove_chars: true # Remove all characters in chars_to_remove below
 replace_sequences: true # Replace multi-character sequences with single-character symbols, as defined in sequence_replacements below
 lowercase_text: false
 map_tones: true
-collapse_whitespace: True # If there are multiple spaces in a row, replace them with a single space
+collapse_whitespace: true # If there are multiple spaces in a row, replace them with a single space
 strip_spaces: false # Remove all whitespace
 
-# Ordered, editable forward normalization pipeline.
+# Blank an entire selected annotation/cell when it contains any listed literal character or sequence. Put drop_sentence_if_contains at the desired point in
+# normalisation_steps; an empty list disables it.
+drop_sentence_if_contains: [ 不, 一, 要, 海, 鹅, 东, 清, 油, 业, 菜, 机, 子, 我, 火, 市, 郎, 孙, 山, 电, 书, 省, 县, 青, 发, 站, 岗, 儿, 虎, 三, 年, 科, 百, 马, 中, 莲, 花, 肉, 是, 类, 农, 耕, 小, 上, 韭, 形, 菌, 凉, 拌, 戒, 指, 骄, 傲, 五, 保, 户, 祖, 辈, 棚, 如, 果, 你, 金, 女, 的, 罗, 刹, 骥, 官, 赤, 玉, 文, 章, 题, 目, 赋, 岛, 骨, 亩, 看, 还, 十, 了, 叉, 安, 岳, 编, 制, 半, 苛, 政, 猛, 于, 救, 配, 识, 抬, 举, 鹿, 茸, 楚, 明, 节, 鹦, 鹉, 人, 间, 预, 备, 起, 局, 学, 早, 熟, 品, 种, 洞, 旋, 厂, 员, 卢, 毓, 吏, 部, 尚, 钢, 墓, 地, 杀, 儆, 西, 汉, 尹, 翁, 归, 郡, 南, 江, 苏, 北, 带, 洲, 郯, 许, 仲, 豆, 梯, 冈, 辣, 枯, 工, 达, 生, 姜, 瞳, 孔, 婴, 阑, 尾, 梦, 富, 历, 史, 记, 载, 香, 料, 室, 几, 只, 角, 器, 动, 手, 术, 苗, 自, 由, 煤, 牧, 盐, 蛹, 幼, 虫, 道, 林, 园, 名, 水, 沟, 贝, 母, 状, 扁, 担, 宽, 锄, 野, 樱, 桃, 披, 衫, 藕, 光, 它, 就, 会, 到, 斤, 锈, 茶, 壶, 全, 导, 体, 精, 锅, 街, 缩, /, (, ), [, ], {, }, <, >, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 ]
+
+# Ordered, editable forward normalisation pipeline.
 # The reverse pipeline is generated automatically where mappings are one-to-one.
-normalization_steps:
+normalisation_steps:
   - remove_bracketed_text
   - replace_sequences
   - lowercase_text
   - map_tones
+  - drop_sentence_if_contains
   - remove_chars
   - collapse_whitespace
   - strip_spaces
@@ -62,33 +74,70 @@ chars_to_remove: # When remove_chars is true, these characters will be removed f
   - "="
   - "*"
   - "-"
+  - ","
+  - '"'
+  - "'"
+  - "“"
+  - "”"
+  - "‘"
+  - "’"
+  - "_"
+  - "﻿"
+  - ":"
+  - ";"
+  - "ʰ"
 
 # Multi-character transcription symbols can be made single-character here.
 # Format: "source=>target"
 sequence_replacements:
-  - "tʰ=>þ"
-  - "kʰ=>ƙ"
-  - "pʰ=>ƥ"
-#  - "sʰ=>ƨ"
-  - "ʈʰ=>Ʈ"
-  - "qʰ=>ƣ"
-#  - "ɕʰ=>Ƭ"
-#  - "ʂʰ=>Ʃ"
   - "tsʰ=>ƾ"
   - "ʈʂʰ=>ƪ"
   - "tɕʰ=>ƫ"
-  - ",=> "
+  - "tʰ=>þ"
+  - "kʰ=>ƙ"
+  - "pʰ=>ƥ"
+  - "sʰ=>ƨ"
+  - "ʈʰ=>Ʈ"
+  - "qʰ=>ƣ"
+  - "ɕʰ=>Ƭ"
+  - "ʂʰ=>Ʃ"
+  # - ",=> "
 
 # Tone numbers can be mapped to single machine-trainable symbols.
 # Format: "source=>target"
 tone_replacements:
-#  - "33=>M"
-#  - "35=>R"
-#  - "53=>F"
-#  - "55=>H"
+  # In the following: R = rising, F = falling, M = mid, H = high
+  # - "33=>M"
+  # - "35=>R"
+  # - "53=>F"
+  # - "55=>H"
+
+# In the following: H = high, M = mid, L = low, Q = mid-rising, B = low-rising, E = low-mid
   - "˥=>H"
   - "˧=>M"
   - "˩=>L"
   - "˧˥=>Q"
-  - "˩˥=>W"
+  - "˩˥=>B"
   - "˩˧=>E"
+
+# In the following: H = high, M = mid, L = low, Q = mid-rising, B = low-rising, E = low-mid
+  # - "ɯ́=>ɯR"
+  # - "ú=>uR"
+  # - "ú=>uR"
+  # - "ü=>υ"
+  # - "ù́=>uB"
+  # - "ù́́=>uB"
+  # - "ù́=>uB"
+  # - "ɤ́=>ɤR"
+  # - "ɤ́́=>ɤR"
+  # - "ó=>oR"
+  # - "ó=>oR"
+  # - "í=>iR"
+  # - "í=>iR"
+  # - "á=>aR"
+  # - "á=>aR"
+  # - "à=>aF"
+  # - "é=>eR"
+  # - "é=>eR"
+  # - "ɛ̃=>ɛN"
+  # - "h́=>h"
