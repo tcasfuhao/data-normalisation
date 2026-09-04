@@ -41,6 +41,21 @@ txt_text_column: 4
 
 Tier and column selectors accept one value, a YAML list, or `all`. Column names are matched case-insensitively. Numeric columns are 1-based. Headerless tables require numeric selectors or `all`; TXT files must declare `txt_delimiter` as `tab`, `comma`, or one literal delimiter character.
 
+## Text policy
+
+To blank a complete selected annotation or cell when it contains a literal character or sequence, configure `drop_sentence_if_contains` and include its step at the desired point in that ordered list:
+
+```yaml
+drop_sentence_if_contains: ["#", "~"]
+normalisation_steps:
+  - drop_sentence_if_contains
+  - replace_sequences
+```
+
+The annotation or cell is retained with empty text, preserving EAF/TextGrid
+timing and table structure. Empty text is reported in the normalisation summary
+and is skipped by downstream ASR preparation.
+
 ## Run
 
 ```bash
