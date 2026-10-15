@@ -1,11 +1,11 @@
-# language: japhug
+language: japhug
 # language: yonghe_qiang
-language: yongning-na
+# language: yongning-na
 
 data_roots:
-  # - ~/projects/my-projects/asr-models/language-downloads/japhug_01/japhug-tshendzin-16k-16
+  - ~/projects/my-projects/asr-models/language-downloads/japhug_01/japhug-tshendzin-16k-16
   # - ~/projects/my-projects/asr-models/language-downloads/yonghe-qiang_01
-  - ~/projects/my-projects/asr-models/language-downloads/yongning-na_01/doreco_yong1270_core_v2.0/
+  # - ~/projects/my-projects/asr-models/language-downloads/yongning-na_01/doreco_yong1270_core_v2.0/
   
 transcription_globs:
   - "*.txt"
@@ -19,18 +19,18 @@ prefer:
   - ".eaf"
 
 # Structured transcription selectors accept one name, a list of names, or all.
-# eaf_tier: all
-eaf_tier: W-0
-textgrid_tier: all
+eaf_tier: all
+# eaf_tier: W-0
+# textgrid_tier: all
 
 # Delimited-table selectors accept header names, 1-based column numbers, or all.
-csv_has_header: true
-csv_text_column: all
-tsv_has_header: true
-tsv_text_column: all
-txt_delimiter: tab
-txt_has_header: false
-txt_text_column: 4
+# csv_has_header: true
+# csv_text_column: all
+# tsv_has_header: true
+# tsv_text_column: all
+# txt_delimiter: tab
+# txt_has_header: false
+# txt_text_column: 4
 
 # Logs remain in this project at output/logs/<language>/<timestamp>/.
 logs_dir: logs
